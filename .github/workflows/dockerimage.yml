@@ -91,6 +91,7 @@ jobs:
           # push latest also
           docker push relizaio/jq:latest
           # finally stream our release metadata back to Reliza
+          cd ..
           docker run --rm relizaio/reliza-go-client addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
             -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --artid reliza-backend-playground-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
