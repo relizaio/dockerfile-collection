@@ -84,7 +84,8 @@ jobs:
           vvar=$(cat full_version_output | jq -r ".version")
           vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
           # build and push docker image
-          docker build . --file jq/Dockerfile -t relizaio/jq:$vvar_tag -t relizaio/jq:latest \
+          cd jq
+          docker build . -t relizaio/jq:$vvar_tag -t relizaio/jq:latest \
            --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
           docker_sha_256=$(docker push relizaio/jq:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
           # push latest also
