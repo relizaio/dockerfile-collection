@@ -48,7 +48,7 @@ jobs:
           docker push relizaio/maven-postgresql:latest
           # finally stream our release metadata back to Reliza
           docker run --rm relizaio/reliza-go-client addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
-            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --artid reliza-backend-playground-$vvar \
+            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --artid reliza-maven-postgresql-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
             --artdigests $docker_sha_256
@@ -93,7 +93,7 @@ jobs:
           # finally stream our release metadata back to Reliza
           cd ..
           docker run --rm relizaio/reliza-go-client addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
-            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --artid reliza-backend-playground-$vvar \
+            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --artid reliza-jq-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/jq --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
             --artdigests $docker_sha_256
@@ -138,7 +138,7 @@ jobs:
           # finally stream our release metadata back to Reliza
           cd ..
           docker run --rm relizaio/reliza-go-client addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
-            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --artid reliza-backend-playground-$vvar \
+            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --artid reliza-awscli-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
             --artdigests $docker_sha_256
