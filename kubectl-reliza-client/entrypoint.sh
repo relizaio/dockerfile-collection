@@ -1,3 +1,4 @@
+#!/bin/sh
 images=" "
 if [ $NAMESPACE == "allnamespaces" ]
 then
