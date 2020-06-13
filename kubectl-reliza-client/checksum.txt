@@ -1,0 +1,1 @@
+6fcf70aae5bc64870c358fac153cdfdc93f55d8bae010741ecce06bb14c083ea  /bin/kubectl
