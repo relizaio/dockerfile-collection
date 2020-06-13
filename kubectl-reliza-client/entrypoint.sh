@@ -4,18 +4,18 @@ images_new=" "
 images_old=" "
 while [ true ]
 do
-    if [ $NAMESPACE == "allnamespaces" ]
+    if [ "$NAMESPACE" == "allnamespaces" ]
     then
         images_new=$(kubectl get pods --all-namespaces -o jsonpath="{.items[*].status.containerStatuses[0].imageID}")
     else
         images_new=$(kubectl get pods -n $NAMESPACE -o jsonpath="{.items[*].status.containerStatuses[0].imageID}")
     fi
-    if [ $images_new != $images_old ]
+    if [ "$images_new" != "$images_old" ]
     then
-        images_old=$images_new
+        images_old="$images_new"
         NAMESPACES=""
         echo "$(date) - change in images detected - shipping images to Reliza Hub"
-        if [ $NAMESPACE == "allnamespaces" ]
+        if [ "$NAMESPACE" == "allnamespaces" ]
         then
             readarray -t NAMESPACES < <(kubectl get ns -o custom-columns=NAME:.metadata.name)
         else
