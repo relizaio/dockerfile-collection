@@ -6,6 +6,7 @@ ARG VERSION=not_versioned
 USER root
 COPY checksum.txt /
 COPY --chown=apprunner:apprunner entrypoint.sh /
+RUN chmod 0500 /entrypoint.sh
 ENV HUB_URI https://relizahub.com
 ENV NAMESPACE allnamespaces
 ADD https://storage.googleapis.com/kubernetes-release/release/v1.18.3/bin/linux/amd64/kubectl /bin/kubectl
