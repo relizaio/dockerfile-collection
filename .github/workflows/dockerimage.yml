@@ -18,11 +18,11 @@ jobs:
         # note that we should supply sha256: prefix to keep convention
         echo -n sha256: > digest_file
         dir=maven-postgresql; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        docker pull relizaio/reliza-go-client
+        docker pull relizaio/reliza-cli
         echo Digest:
         echo $(cat digest_file)
         # call reliza and see if this file system artifact was already registered before
-        docker run --rm relizaio/reliza-go-client checkhash  \
+        docker run --rm relizaio/reliza-cli checkhash  \
           -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
         echo "Response from Reliza:"
         check=$(cat reliza_hash_check)
@@ -33,7 +33,7 @@ jobs:
         if [ "$check" == "{}" ]
         then
           # obtain version
-          docker run --rm relizaio/reliza-go-client getversion \
+          docker run --rm relizaio/reliza-cli getversion \
             -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
@@ -47,7 +47,7 @@ jobs:
           # push latest also
           docker push relizaio/maven-postgresql:latest
           # finally stream our release metadata back to Reliza
-          docker run --rm relizaio/reliza-go-client addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
             -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --artid reliza-maven-postgresql-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
@@ -61,11 +61,11 @@ jobs:
         # note that we should supply sha256: prefix to keep convention
         echo -n sha256: > digest_file
         dir=jq; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        docker pull relizaio/reliza-go-client
+        docker pull relizaio/reliza-cli
         echo Digest:
         echo $(cat digest_file)
         # call reliza and see if this file system artifact was already registered before
-        docker run --rm relizaio/reliza-go-client checkhash  \
+        docker run --rm relizaio/reliza-cli checkhash  \
           -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
         echo "Response from Reliza:"
         check=$(cat reliza_hash_check)
@@ -76,7 +76,7 @@ jobs:
         if [ "$check" == "{}" ]
         then
           # obtain version
-          docker run --rm relizaio/reliza-go-client getversion \
+          docker run --rm relizaio/reliza-cli getversion \
             -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
@@ -92,7 +92,7 @@ jobs:
           docker push relizaio/jq:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          docker run --rm relizaio/reliza-go-client addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
             -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --artid reliza-jq-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/jq --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
@@ -106,11 +106,11 @@ jobs:
         # note that we should supply sha256: prefix to keep convention
         echo -n sha256: > digest_file
         dir=awscli; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        docker pull relizaio/reliza-go-client
+        docker pull relizaio/reliza-cli
         echo Digest:
         echo $(cat digest_file)
         # call reliza and see if this file system artifact was already registered before
-        docker run --rm relizaio/reliza-go-client checkhash  \
+        docker run --rm relizaio/reliza-cli checkhash  \
           -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
         echo "Response from Reliza:"
         check=$(cat reliza_hash_check)
@@ -121,7 +121,7 @@ jobs:
         if [ "$check" == "{}" ]
         then
           # obtain version
-          docker run --rm relizaio/reliza-go-client getversion \
+          docker run --rm relizaio/reliza-cli getversion \
             -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
@@ -137,7 +137,7 @@ jobs:
           docker push relizaio/awscli:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          docker run --rm relizaio/reliza-go-client addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
             -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --artid reliza-awscli-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
@@ -145,17 +145,17 @@ jobs:
         else
           echo "Artifact is already part of another release, not duplicating"
         fi
-    - name: Build and submit release for kubectl reliza client image
+    - name: Build and submit release for kubectl Reliza Watcher image
       run: |
         # compute sha256 for the filesystem
         # note that we should supply sha256: prefix to keep convention
         echo -n sha256: > digest_file
-        dir=kubectl-reliza-client; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        docker pull relizaio/reliza-go-client
+        dir=reliza-watcher; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
+        docker pull relizaio/reliza-cli
         echo Digest:
         echo $(cat digest_file)
         # call reliza and see if this file system artifact was already registered before
-        docker run --rm relizaio/reliza-go-client checkhash  \
+        docker run --rm relizaio/reliza-cli checkhash  \
           -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
         echo "Response from Reliza:"
         check=$(cat reliza_hash_check)
@@ -166,7 +166,7 @@ jobs:
         if [ "$check" == "{}" ]
         then
           # obtain version
-          docker run --rm relizaio/reliza-go-client getversion \
+          docker run --rm relizaio/reliza-cli getversion \
             -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
@@ -174,18 +174,18 @@ jobs:
           vvar=$(cat full_version_output | jq -r ".version")
           vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
           # build and push docker image
-          cd kubectl-reliza-client
-          docker build . -t relizaio/kubectl-reliza-client:$vvar_tag -t relizaio/kubectl-reliza-client:latest \
+          cd reliza-watcher
+          docker build . -t relizaio/reliza-watcher:$vvar_tag -t relizaio/reliza-watcher:latest \
            --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          docker_sha_256=$(docker push relizaio/kubectl-reliza-client:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
+          docker_sha_256=$(docker push relizaio/reliza-watcher:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
           # push latest also
-          docker push relizaio/kubectl-reliza-client:latest
+          docker push relizaio/reliza-watcher:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          docker run --rm relizaio/reliza-go-client addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
-            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --artid reliza-kubectl-reliza-client-$vvar \
+          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --artid reliza-reliza-watcher-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
-            --artid relizaio/kubectl-reliza-client --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
+            --artid relizaio/reliza-watcher --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
             --artdigests $docker_sha_256
         else
           echo "Artifact is already part of another release, not duplicating"
