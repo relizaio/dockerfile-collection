@@ -50,8 +50,9 @@ jobs:
           docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
             -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --artid reliza-maven-postgresql-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
-            --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
-            --artdigests $docker_sha_256
+            --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
+            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
+            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256
         else
           echo "Artifact is already part of another release, not duplicating"
         fi
