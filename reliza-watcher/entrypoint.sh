@@ -4,11 +4,11 @@ images_new=" "
 images_old=" "
 while [ true ]
 do
-    images_new=$(kubectl get pods --all-namespaces -o jsonpath="{.items[*].status.containerStatuses[0].imageID}")
-    if [ "$images_new" != "$images_old" ]
+    cp /resources/images /resources/images_old
+    kubectl get po -o json | jq "[{namespace:.items[].metadata.namespace, pod:.items[].metadata.name, status:.items[].status.containerStatuses[]}] > /resources/images
+    difflines=$(diff /resources/images /resources/images_old | wc -l)
+    if [ $difflines -gt 0 ]
     then
-        images_old="$images_new"
-        NAMESPACES=""
         echo "$(date) - change in images detected - shipping images to Reliza Hub"
         echo "new images = $images_new"
         if [ "$NAMESPACE" == "allnamespaces" ]
@@ -20,9 +20,8 @@ do
         for ns in "${NAMESPACES[@]}"; do
             if [ $ns != "NAME" ]
             then
-                images=$(kubectl get pods -n $ns -o jsonpath="{.items[*].status.containerStatuses[0].imageID}")
-                echo "$(date) shipping images for ns $ns = $images"
-                /app/app instdata -u $HUB_URI -i $RELIZA_API_ID -k $RELIZA_API_KEY --sender $SENDER_ID --namespace $ns --images "$images"
+                echo "$(date) shipping images for ns $ns"
+                /app/app instdata -u $HUB_URI -i $RELIZA_API_ID -k $RELIZA_API_KEY --sender $SENDER_ID --namespace $ns --imagestyle k8s --imagefile /resources/images
             fi
         done
     fi

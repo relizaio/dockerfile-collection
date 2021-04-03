@@ -1,10 +1,11 @@
-FROM relizaio/reliza-cli@sha256:92b873ebaa838f09ac082bc0f8340d0b199a48f30ce9edbf03bfe62f30912304
+FROM relizaio/reliza-cli@sha256:f4ce873ff0b939cf03a77f407208ee8d622c649a69972401e22ba216a179b01f
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
 USER root
-RUN apk add bash
+RUN apk add bash jq
+RUN mkdir /resources && chown apprunner:apprunner /resources
 COPY checksum.txt /
 COPY --chown=apprunner:apprunner entrypoint.sh /
 RUN chmod 0500 /entrypoint.sh
@@ -15,6 +16,7 @@ ADD https://storage.googleapis.com/kubernetes-release/release/v1.18.3/bin/linux/
 RUN sha256sum -c checksum.txt
 RUN chmod 0755 /bin/kubectl
 USER apprunner
+RUN echo "{}" > /resources/images
 LABEL git_commit $GIT_COMMIT
 LABEL git_branch $GIT_BRANCH
 LABEL ci_environment $CI_ENV
