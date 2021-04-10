@@ -3,7 +3,7 @@
 while [ true ]
 do
     cp /resources/images /resources/images_old
-    kubectl get po --all-namespaces -o json | jq "[.items[] | {namespace:.metadata.namespace, pod:.metadata.name, status:.status.containerStatuses[]}]" > /resources/images
+    kubectl get po --all-namespaces -o json | jq "[.items[] | {namespace:.metadata.namespace, pod:.metadata.name, status:.status.containerStatuses}]" > /resources/images
     difflines=$(diff /resources/images /resources/images_old | wc -l)
     if [ $difflines -gt 0 ]
     then
