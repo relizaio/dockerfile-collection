@@ -47,12 +47,21 @@ jobs:
           # push latest also
           docker push relizaio/maven-postgresql:latest
           # finally stream our release metadata back to Reliza
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar --commitmessage "$(git log -1 --pretty='%s')" \
             -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --artid reliza-maven-postgresql-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
-            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256
+            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_API_ID }} -k ${{ secrets.RELIZA_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          if [ ! -z "$last_commit" ]
+          then
+            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
+          fi
+          # debug
+          cat reliza_command
+          # send data
+          docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command)
         else
           echo "Artifact is already part of another release, not duplicating"
         fi
@@ -93,11 +102,21 @@ jobs:
           docker push relizaio/jq:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar --commitmessage "$(git log -1 --pretty='%s')" \
             -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --artid reliza-jq-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
-            --artid relizaio/jq --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
-            --artdigests $docker_sha_256
+            --artid relizaio/jq --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
+            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
+            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_API_ID }} -k ${{ secrets.RELIZA_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          if [ ! -z "$last_commit" ]
+          then
+            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
+          fi
+          # debug
+          cat reliza_command
+          # send data
+          docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command)
         else
           echo "Artifact is already part of another release, not duplicating"
         fi
@@ -138,11 +157,12 @@ jobs:
           docker push relizaio/awscli:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar --commitmessage "$(git log -1 --pretty='%s')" \
             -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --artid reliza-awscli-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
-            --artid relizaio/awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
-            --artdigests $docker_sha_256 " >> reliza_command
+            --artid relizaio/awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
+            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
+            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
           last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_API_ID }} -k ${{ secrets.RELIZA_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
           if [ ! -z "$last_commit" ]
           then
@@ -192,11 +212,21 @@ jobs:
           docker push relizaio/reliza-watcher:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar --commitmessage "$(git log -1 --pretty='%s')" \
             -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --artid reliza-reliza-watcher-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
-            --artid relizaio/reliza-watcher --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
-            --artdigests $docker_sha_256
+            --artid relizaio/reliza-watcher --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
+            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
+            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_API_ID }} -k ${{ secrets.RELIZA_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          if [ ! -z "$last_commit" ]
+          then
+            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
+          fi
+          # debug
+          cat reliza_command
+          # send data
+          docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command)
         else
           echo "Artifact is already part of another release, not duplicating"
         fi
