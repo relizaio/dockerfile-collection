@@ -9,7 +9,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - name: checkout
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
     - name: Login to Docker Registry
       run: echo ${{ secrets.docker_token }} | docker login -u ${{ secrets.docker_login }} --password-stdin
     - name: Build and submit release for Maven Postgresql CI
@@ -53,7 +56,9 @@ jobs:
             --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_API_ID }} -k ${{ secrets.RELIZA_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
+            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} \
+            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
           if [ ! -z "$last_commit" ]
           then
             echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
@@ -108,7 +113,9 @@ jobs:
             --artid relizaio/jq --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_API_ID }} -k ${{ secrets.RELIZA_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
+            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} \
+            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
           if [ ! -z "$last_commit" ]
           then
             echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
@@ -163,7 +170,9 @@ jobs:
             --artid relizaio/awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_API_ID }} -k ${{ secrets.RELIZA_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
+            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} \
+            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
           if [ ! -z "$last_commit" ]
           then
             echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
@@ -218,7 +227,9 @@ jobs:
             --artid relizaio/reliza-watcher --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_API_ID }} -k ${{ secrets.RELIZA_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
+            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} \
+            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
           if [ ! -z "$last_commit" ]
           then
             echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
