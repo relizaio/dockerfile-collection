@@ -21,7 +21,6 @@ jobs:
         # note that we should supply sha256: prefix to keep convention
         echo -n sha256: > digest_file
         dir=maven-postgresql; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        docker pull relizaio/reliza-cli
         echo Digest:
         echo $(cat digest_file)
         # call reliza and see if this file system artifact was already registered before
@@ -77,7 +76,6 @@ jobs:
         # note that we should supply sha256: prefix to keep convention
         echo -n sha256: > digest_file
         dir=jq; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        docker pull relizaio/reliza-cli
         echo Digest:
         echo $(cat digest_file)
         # call reliza and see if this file system artifact was already registered before
@@ -135,7 +133,6 @@ jobs:
         # note that we should supply sha256: prefix to keep convention
         echo -n sha256: > digest_file
         dir=awscli; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        docker pull relizaio/reliza-cli
         echo Digest:
         echo $(cat digest_file)
         # call reliza and see if this file system artifact was already registered before
@@ -193,7 +190,6 @@ jobs:
         # note that we should supply sha256: prefix to keep convention
         echo -n sha256: > digest_file
         dir=reliza-watcher; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        docker pull relizaio/reliza-cli
         echo Digest:
         echo $(cat digest_file)
         # call reliza and see if this file system artifact was already registered before
@@ -242,6 +238,46 @@ jobs:
           # send data
           echo docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command) > rlz_cmd_exec
           eval $(cat rlz_cmd_exec)
+        else
+          echo "Artifact is already part of another release, not duplicating"
+        fi
+    - name: Build and submit release for Reliza Helm Push image
+      run: |
+        # compute sha256 for the filesystem
+        # note that we should supply sha256: prefix to keep convention
+        echo -n sha256: > digest_file
+        dir=helmpush; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
+        # call reliza and see if this file system artifact was already registered before
+        docker run --rm relizaio/reliza-cli checkhash  \
+          -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
+        check=$(cat reliza_hash_check)
+        # little sleep is needed to make sure GitHub Actions calculates if condition correctly
+        sleep 2
+        # now only create new release if no release was found with same hash
+        if [ "$check" == "{}" ]
+        then
+          # obtain version
+          docker run --rm relizaio/reliza-cli getversion \
+            -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
+          echo "Version response:"
+          cat full_version_output
+          # now construct actual version variable
+          vvar=$(cat full_version_output | jq -r ".version")
+          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
+          # build and push docker image
+          cd helmpush
+          docker build . -t relizaio/helmpush:$vvar_tag -t relizaio/helmpush:latest \
+           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
+          docker_sha_256=$(docker push relizaio/helmpush:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
+          # push latest also
+          docker push relizaio/helmpush:latest
+          # finally stream our release metadata back to Reliza
+          cd ..
+          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+            -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} --artid reliza-helmpush-$vvar \
+            --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
+            --artid relizaio/helmpush --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
+            --artdigests $docker_sha_256
         else
           echo "Artifact is already part of another release, not duplicating"
         fi
