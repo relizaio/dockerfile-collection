@@ -1,4 +1,4 @@
-FROM alpine/helm:3.5.2
+FROM alpine/helm:3.5.4
 
 RUN apk add git
 
