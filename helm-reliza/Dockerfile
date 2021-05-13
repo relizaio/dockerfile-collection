@@ -14,7 +14,9 @@ ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
 COPY --from=build-stage /tmp/reliza-cli /bin/
+RUN adduser -D apprunner
 LABEL git_commit $GIT_COMMIT
 LABEL git_branch $GIT_BRANCH
 LABEL ci_environment $CI_ENV
 LABEL version $VERSION
+USER apprunner
