@@ -13,6 +13,7 @@ ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
+RUN apk add jq
 COPY --from=build-stage /tmp/reliza-cli /bin/
 RUN adduser -D apprunner
 LABEL git_commit $GIT_COMMIT
