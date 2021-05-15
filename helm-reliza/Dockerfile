@@ -15,7 +15,7 @@ ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
 RUN apk add jq
 COPY --from=build-stage /tmp/reliza-cli /bin/
-RUN adduser -D apprunner
+RUN adduser -D apprunner && chown apprunner:apprunner /apps
 LABEL git_commit $GIT_COMMIT
 LABEL git_branch $GIT_BRANCH
 LABEL ci_environment $CI_ENV
