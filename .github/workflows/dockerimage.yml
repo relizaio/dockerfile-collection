@@ -34,9 +34,18 @@ jobs:
         # now only create new release if no release was found with same hash
         if [ "$check" == "{}" ]
         then
+          # extract last release commit and prepare list of commits
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
+            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} \
+            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          if [ ! -z "$last_commit" ]
+          then
+            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
+          fi
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
+            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} -b $GITHUB_REF \
+            --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\ > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
           # now construct actual version variable
@@ -49,19 +58,12 @@ jobs:
           # push latest also
           docker push relizaio/maven-postgresql:latest
           # finally stream our release metadata back to Reliza
-          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar --commitmessage \"$(git log -1 --pretty='%s')\" \
+          echo -n "-b $GITHUB_REF -v $vvar \
             -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --artid reliza-maven-postgresql-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
-            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} \
-            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-          if [ ! -z "$last_commit" ]
-          then
-            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
-          fi
           # debug
           cat reliza_command
           # send data
@@ -89,9 +91,18 @@ jobs:
         # now only create new release if no release was found with same hash
         if [ "$check" == "{}" ]
         then
+          # extract last release commit and prepare list of commits
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
+            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} \
+            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          if [ ! -z "$last_commit" ]
+          then
+            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
+          fi
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
+            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} -b $GITHUB_REF \
+            --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\" > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
           # now construct actual version variable
@@ -106,19 +117,12 @@ jobs:
           docker push relizaio/jq:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar --commitmessage \"$(git log -1 --pretty='%s')\" \
+          echo -n "-b $GITHUB_REF -v $vvar \
             -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --artid reliza-jq-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/jq --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
-            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} \
-            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-          if [ ! -z "$last_commit" ]
-          then
-            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
-          fi
           # debug
           cat reliza_command
           # send data
@@ -146,9 +150,18 @@ jobs:
         # now only create new release if no release was found with same hash
         if [ "$check" == "{}" ]
         then
+          # extract last release commit and prepare list of commits
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
+            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} \
+            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          if [ ! -z "$last_commit" ]
+          then
+            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
+          fi
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
+            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} -b $GITHUB_REF \
+            --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\" > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
           # now construct actual version variable
@@ -163,19 +176,12 @@ jobs:
           docker push relizaio/awscli:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar --commitmessage \"$(git log -1 --pretty='%s')\" \
+          echo -n "-b $GITHUB_REF -v $vvar \
             -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --artid reliza-awscli-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
-            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} \
-            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-          if [ ! -z "$last_commit" ]
-          then
-            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
-          fi
           # debug
           cat reliza_command
           # send data
@@ -203,9 +209,18 @@ jobs:
         # now only create new release if no release was found with same hash
         if [ "$check" == "{}" ]
         then
+          # extract last release commit and prepare list of commits
+          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
+            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} \
+            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+          if [ ! -z "$last_commit" ]
+          then
+            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
+          fi
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
+            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} -b $GITHUB_REF
+            --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\" > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
           # now construct actual version variable
@@ -220,19 +235,12 @@ jobs:
           docker push relizaio/reliza-watcher:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          echo -n "-b $GITHUB_REF --commit $GITHUB_SHA -v $vvar --commitmessage \"$(git log -1 --pretty='%s')\" \
+          echo -n "-b $GITHUB_REF -v $vvar \
             -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --artid reliza-reliza-watcher-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/reliza-watcher --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
-            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} \
-            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-          if [ ! -z "$last_commit" ]
-          then
-            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " >> reliza_command
-          fi
           # debug
           cat reliza_command
           # send data
@@ -258,7 +266,8 @@ jobs:
         then
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
+            -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} \
+            -b $GITHUB_REF --commit $GITHUB_SHA > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
           # now construct actual version variable
@@ -273,7 +282,7 @@ jobs:
           docker push relizaio/helmpush:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF -v $vvar \
             -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} --artid reliza-helmpush-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/helmpush --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
@@ -298,7 +307,8 @@ jobs:
         then
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} -b $GITHUB_REF > full_version_output 2>&1
+            -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} \
+            -b $GITHUB_REF --commit $GITHUB_SHA > full_version_output 2>&1
           echo "Version response:"
           cat full_version_output
           # now construct actual version variable
@@ -313,7 +323,7 @@ jobs:
           docker push relizaio/helm-reliza-cli:latest
           # finally stream our release metadata back to Reliza
           cd ..
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF --commit $GITHUB_SHA -v $vvar \
+          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF -v $vvar \
             -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} --artid reliza-helm-reliza-cli-$vvar \
             --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
             --artid relizaio/helm-reliza-cli --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
