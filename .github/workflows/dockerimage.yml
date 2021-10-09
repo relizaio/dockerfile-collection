@@ -229,7 +229,7 @@ jobs:
           vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
           # build and push docker image
           cd reliza-watcher
-          docker build . -t relizaio/reliza-watcher:$vvar_tag -t relizaio/reliza-watcher:latest 
+          docker build . -t relizaio/reliza-watcher:$vvar_tag -t relizaio/reliza-watcher:latest \
            --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
           echo "debug: after build before push"
           docker_sha_256=$(docker push relizaio/reliza-watcher:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
