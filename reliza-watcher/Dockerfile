@@ -1,4 +1,4 @@
-FROM relizaio/reliza-cli@sha256:f4ce873ff0b939cf03a77f407208ee8d622c649a69972401e22ba216a179b01f
+FROM relizaio/reliza-cli@sha256:fc09bf086e4599311f9ec05768d9d89c25597131068518239e2855235ae4ed83
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
@@ -12,7 +12,7 @@ RUN chmod 0500 /entrypoint.sh
 ENV HUB_URI https://relizahub.com
 ENV NAMESPACE allnamespaces
 ENV SENDER_ID default
-ADD https://storage.googleapis.com/kubernetes-release/release/v1.18.3/bin/linux/amd64/kubectl /bin/kubectl
+ADD https://storage.googleapis.com/kubernetes-release/release/v1.19.15/bin/linux/amd64/kubectl /bin/kubectl
 RUN sha256sum -c checksum.txt
 RUN chmod 0755 /bin/kubectl
 USER apprunner
