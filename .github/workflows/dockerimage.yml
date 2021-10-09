@@ -220,7 +220,7 @@ jobs:
           fi
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} -b $GITHUB_REF
+            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} -b $GITHUB_REF \
             --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\" $(cat commit_list) > full_version_output 2>&1 || echo "getting version failed"
           echo "Version response:"
           cat full_version_output
