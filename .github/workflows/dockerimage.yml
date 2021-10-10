@@ -15,6 +15,8 @@ jobs:
         fetch-depth: 50
     - name: Login to Docker Registry
       run: echo ${{ secrets.docker_token }} | docker login -u ${{ secrets.docker_login }} --password-stdin
+    - name: Pull Reliza CLI
+      run: docker pull relizaio/reliza-cli
     - name: Build and submit release for Maven Postgresql CI
       run: |
         # compute sha256 for the filesystem
