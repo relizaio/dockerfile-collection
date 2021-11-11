@@ -12,7 +12,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@v2
       with:
-        fetch-depth: 50
+        fetch-depth: 100
     - name: Login to Docker Registry
       run: echo ${{ secrets.docker_token }} | docker login -u ${{ secrets.docker_login }} --password-stdin
     - name: Pull Reliza CLI
