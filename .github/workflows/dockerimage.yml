@@ -19,31 +19,22 @@ jobs:
       run: docker pull relizaio/reliza-cli
     - name: Build and submit release for Maven Postgresql CI
       run: |
-        # compute sha256 for the filesystem
-        # note that we should supply sha256: prefix to keep convention
-        echo -n sha256: > digest_file
-        dir=maven-postgresql; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        echo Digest:
-        echo $(cat digest_file)
-        # call reliza and see if this file system artifact was already registered before
-        docker run --rm relizaio/reliza-cli checkhash  \
-          -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
-        echo "Response from Reliza:"
-        check=$(cat reliza_hash_check)
-        echo $check
-        # little sleep is needed to make sure GitHub Actions calculates if condition correctly
-        sleep 2
-        # now only create new release if no release was found with same hash
-        if [ "$check" == "{}" ]
+        dir=maven-postgresql
+        dobuild=false
+        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+        if [ ! -z "$last_commit" ]
         then
-          # extract last release commit and prepare list of commits
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
-            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} \
-            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-          if [ ! -z "$last_commit" ]
+          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
+          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
+          if [ "$difflines" != "0" ]
           then
-            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " > commit_list
+            dobuild=true
           fi
+        else
+          dobuild=true
+        fi
+        if [ "$dobuild" == "true" ]
+        then
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
             -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} -b $GITHUB_REF \
@@ -61,8 +52,7 @@ jobs:
           docker push relizaio/maven-postgresql:latest
           # finally stream our release metadata back to Reliza
           echo -n "-b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --artid reliza-maven-postgresql-$vvar \
-            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
+            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} \
             --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
@@ -125,31 +115,22 @@ jobs:
         fi
     - name: Build and submit release for AWS CLI v1
       run: |
-        # compute sha256 for the filesystem
-        # note that we should supply sha256: prefix to keep convention
-        echo -n sha256: > digest_file
-        dir=awscli; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        echo Digest:
-        echo $(cat digest_file)
-        # call reliza and see if this file system artifact was already registered before
-        docker run --rm relizaio/reliza-cli checkhash  \
-          -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
-        echo "Response from Reliza:"
-        check=$(cat reliza_hash_check)
-        echo $check
-        # little sleep is needed to make sure GitHub Actions calculates if condition correctly
-        sleep 2
-        # now only create new release if no release was found with same hash
-        if [ "$check" == "{}" ]
+        dir=awscli
+        dobuild=false
+        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+        if [ ! -z "$last_commit" ]
         then
-          # extract last release commit and prepare list of commits
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
-            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} \
-            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-          if [ ! -z "$last_commit" ]
+          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
+          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
+          if [ "$difflines" != "0" ]
           then
-            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " > commit_list
+            dobuild=true
           fi
+        else
+          dobuild=true
+        fi
+        if [ "$dobuild" == "true" ]
+        then
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
             -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} -b $GITHUB_REF \
@@ -169,8 +150,7 @@ jobs:
           # finally stream our release metadata back to Reliza
           cd ..
           echo -n "-b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --artid reliza-awscli-$vvar \
-            --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
+            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} \
             --artid relizaio/awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
@@ -184,32 +164,22 @@ jobs:
         fi
     - name: Build and submit release for kubectl Reliza Watcher image
       run: |
-        # compute sha256 for the filesystem
-        # note that we should supply sha256: prefix to keep convention
-        echo -n sha256: > digest_file
-        dir=reliza-watcher; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        echo Digest:
-        echo $(cat digest_file)
-        # call reliza and see if this file system artifact was already registered before
-        docker run --rm relizaio/reliza-cli checkhash  \
-          -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
-        echo "Response from Reliza:"
-        check=$(cat reliza_hash_check)
-        echo $check
-        # little sleep is needed to make sure GitHub Actions calculates if condition correctly
-        sleep 2
-        # now only create new release if no release was found with same hash
-        if [ "$check" == "{}" ]
+        dir=reliza-watcher
+        dobuild=false
+        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+        if [ ! -z "$last_commit" ]
         then
-          # extract last release commit and prepare list of commits
-          last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease \
-            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} \
-            --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-          echo "last commit = $last_commit"
-          if [ ! -z "$last_commit" ]
+          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
+          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
+          if [ "$difflines" != "0" ]
           then
-            echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' | base64 -w 0) " > commit_list
+            dobuild=true
           fi
+        else
+          dobuild=true
+        fi
+        if [ "$dobuild" == "true" ]
+        then
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
             -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} -b $GITHUB_REF \
@@ -231,8 +201,7 @@ jobs:
           # finally stream our release metadata back to Reliza
           cd ..
           echo -n "-b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --artid reliza-reliza-watcher-$vvar \
-            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
+            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} \
             --artid relizaio/reliza-watcher --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
             --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
             --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
@@ -248,7 +217,7 @@ jobs:
       run: |
         dir=helmpush
         dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
         if [ ! -z "$last_commit" ]
         then
           echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
@@ -289,18 +258,21 @@ jobs:
         fi
     - name: Build and submit release for Helm and Reliza CLI image
       run: |
-        # compute sha256 for the filesystem
-        # note that we should supply sha256: prefix to keep convention
-        echo -n sha256: > digest_file
-        dir=helm-reliza; find "$dir" -type f -exec sha256sum {} \; | sed "s~$dir~~g" | sort -d | sha256sum | cut -d ' ' -f 1 >> digest_file
-        # call reliza and see if this file system artifact was already registered before
-        docker run --rm relizaio/reliza-cli checkhash  \
-          -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} --hash $(cat digest_file) > reliza_hash_check 2>&1
-        check=$(cat reliza_hash_check)
-        # little sleep is needed to make sure GitHub Actions calculates if condition correctly
-        sleep 2
-        # now only create new release if no release was found with same hash
-        if [ "$check" == "{}" ]
+        dir=helm-reliza
+        dobuild=false
+        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+        if [ ! -z "$last_commit" ]
+        then
+          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
+          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
+          if [ "$difflines" != "0" ]
+          then
+            dobuild=true
+          fi
+        else
+          dobuild=true
+        fi
+        if [ "$dobuild" == "true" ]
         then
           # obtain version
           docker run --rm relizaio/reliza-cli getversion \
@@ -321,8 +293,7 @@ jobs:
           # finally stream our release metadata back to Reliza
           cd ..
           docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} --artid reliza-helm-reliza-cli-$vvar \
-            --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype file_system --artdigests $(cat digest_file) \
+            -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} \
             --artid relizaio/helm-reliza-cli --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
             --artdigests $docker_sha_256
         else
