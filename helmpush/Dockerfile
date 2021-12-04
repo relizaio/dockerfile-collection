@@ -1,4 +1,4 @@
-FROM alpine/helm:3.6.3
+FROM alpine/helm:3.5.4
 
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
