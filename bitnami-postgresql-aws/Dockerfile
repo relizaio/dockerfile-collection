@@ -1,7 +1,7 @@
 FROM bitnami/postgresql:14
 USER root
-RUN yum update
-RUN yum install -y python3 python3-pip python3-setuptools
+RUN apt-get update
+RUN apt-get install -y python3 python3-pip python3-setuptools
 RUN pip3 install awscli --upgrade
 RUN aws --version
 RUN psql --version
