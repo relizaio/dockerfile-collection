@@ -327,7 +327,7 @@ jobs:
           vvar=$(cat full_version_output | jq -r ".version")
           vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
           # build and push docker image
-          cd helm-reliza
+          cd $dir
           docker build . -t relizaio/psql-awscli:$vvar_tag -t relizaio/psql-awscli:latest \
            --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
           docker_sha_256=$(docker push relizaio/psql-awscli:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
