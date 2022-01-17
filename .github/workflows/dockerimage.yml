@@ -342,3 +342,46 @@ jobs:
         else
           echo "Artifact is already part of another release, not duplicating"
         fi
+    - name: Build and submit release for PostgreSQL Postgis
+      run: |
+        dir=postgres-postgis
+        dobuild=false
+        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
+        if [ ! -z "$last_commit" ]
+        then
+          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
+          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
+          if [ "$difflines" != "0" ]
+          then
+            dobuild=true
+          fi
+        else
+          dobuild=true
+        fi
+        if [ "$dobuild" == "true" ]
+        then
+          # obtain version
+          docker run --rm relizaio/reliza-cli getversion \
+            -i ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_KEY }} \
+            -b $GITHUB_REF --commit $GITHUB_SHA > full_version_output 2>&1
+          echo "Version response:"
+          cat full_version_output
+          # now construct actual version variable
+          vvar=$(cat full_version_output | jq -r ".version")
+          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
+          # build and push docker image
+          cd $dir
+          docker build . -t relizaio/postgres-postgis:$vvar_tag -t relizaio/postgres-postgis:latest \
+           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
+          docker_sha_256=$(docker push relizaio/postgres-postgis:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
+          # push latest also
+          docker push relizaio/postgres-postgis:latest
+          # finally stream our release metadata back to Reliza
+          cd ..
+          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF -v $vvar \
+            -i ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_KEY }} \
+            --artid relizaio/postgres-postgis --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
+            --artdigests $docker_sha_256
+        else
+          echo "Artifact is already part of another release, not duplicating"
+        fi
