@@ -32,7 +32,19 @@ while [ true ]
 do
     record_timestamp=0
     cp /resources/images /resources/images_old
-    kubectl get po --all-namespaces -o json | jq "[.items[] | {namespace:.metadata.namespace, pod:.metadata.name, status:.status.containerStatuses}]" > /resources/images
+    if [ "$NAMESPACE" == "allnamespaces" ]
+    then
+      kubectl get po --all-namespaces -o json | jq "[.items[] | {namespace:.metadata.namespace, pod:.metadata.name, status:.status.containerStatuses}]" > /resources/images
+    else
+      echo "images start" > /resources/images
+      IFS="," read -ra NAMESPACESCHECK <<< "$NAMESPACE"
+      for nsc in "${NAMESPACESCHECK[@]}"; do
+        if [ $nsc != "NAME" ]
+        then
+            kubectl get po -n $nsc -o json | jq "[.items[] | {namespace:.metadata.namespace, pod:.metadata.name, status:.status.containerStatuses}]" >> /resources/images
+        fi
+      done
+    fi
     difflines=$(diff /resources/images /resources/images_old | wc -l)
     if [ $difflines -gt 0 ]
     then
