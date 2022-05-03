@@ -50,13 +50,13 @@ do
     then
         record_timestamp=1
         send_data
-    else
+    # else
         # send follow ups to ensure we converge properly
-        record_timestamp=0
-        if [ $(expr $(date +"%s") - $(cat /resources/last_sent)) -lt 30 ]
-        then
-            send_data
-        fi
+    #    record_timestamp=0
+    #    if [ $(expr $(date +"%s") - $(cat /resources/last_sent)) -lt 30 ]
+    #    then
+    #        send_data
+    #    fi
     fi
     sleep 10
 done
