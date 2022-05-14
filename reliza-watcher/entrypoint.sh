@@ -58,5 +58,5 @@ do
     #        send_data
     #    fi
     fi
-    sleep 10
+    sleep 15
 done
