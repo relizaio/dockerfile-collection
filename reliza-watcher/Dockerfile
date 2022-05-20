@@ -1,4 +1,4 @@
-FROM relizaio/reliza-cli@sha256:c99969e8579b330efaddcb6d3593868d3691bb69db3ddd1ee9bc19188014b4d8
+FROM relizaio/reliza-cli@sha256:12ae35ba1185c0d8f5692f7d2d133c26bd3c6ecb654bdb217d4435540652633e
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
