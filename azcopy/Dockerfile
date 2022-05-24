@@ -8,6 +8,7 @@ ARG VERSION=not_versioned
 
 RUN apk --update add --virtual build-dependencies --no-cache wget tar 
 RUN apk --update add libc6-compat ca-certificates
+RUN apk add --no-cache postgresql-client
 
 RUN wget -O azcopy.tar.gz https://azcopyvnext.azureedge.net/release20220511/${AZVERSION}.tar.gz && \
     tar -xf azcopy.tar.gz && \
