@@ -11,12 +11,18 @@ send_data () {
     else
         IFS="," read -ra NAMESPACES <<< "$NAMESPACE"
     fi
+    relizaHubUri=https://app.relizahub.com
+    if [ ! -z "$HUB_URI" ]
+    then
+      relizaHubUri=$HUB_URI
+    fi
     for ns in "${NAMESPACES[@]}"; do
         if [ $ns != "NAME" ]
         then
             kubectl get po -n $ns -o json | jq "[.items[] | {namespace:.metadata.namespace, pod:.metadata.name, status:.status.containerStatuses[]}]" > /resources/images_to_send
             echo "$(date) shipping images for $ns namespace"
-            /app/app instdata -u $HUB_URI -i $RELIZA_API_ID -k $RELIZA_API_KEY --sender $SENDER_ID$ns --namespace $ns --imagestyle k8s --imagefile /resources/images_to_send
+            
+            /app/app instdata -u $relizaHubUri -i $RELIZA_API_ID -k $RELIZA_API_KEY --sender $SENDER_ID$ns --namespace $ns --imagestyle k8s --imagefile /resources/images_to_send
             
             # record last sent timestamp
             if [ $record_timestamp -eq 1 ]
