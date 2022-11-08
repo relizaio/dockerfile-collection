@@ -6,7 +6,7 @@ RUN wget https://d7ge14utcyki8.cloudfront.net/reliza-cli-download/2022.11.1/reli
 
 RUN echo '3580bf309b252556df3c106418126d7c009e1c43f0f75a2c5ce738893771753d  reliza-cli-2022.11.1-linux-amd64.zip' > shasum
 RUN sha256sum -c shasum
-RUN unzip reliza-cli-2022.07.6-linux-amd64.zip && cp reliza-cli /tmp/
+RUN unzip reliza-cli-2022.11.1-linux-amd64.zip && cp reliza-cli /tmp/
 
 FROM alpine/helm:3.7.2 as artifact-stage
 ARG CI_ENV=noci
