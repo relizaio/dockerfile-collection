@@ -9,7 +9,7 @@ RUN mkdir /resources && chown apprunner:apprunner /resources
 COPY checksum.txt /
 COPY --chown=apprunner:apprunner entrypoint.sh /
 RUN chmod 0500 /entrypoint.sh
-ENV HUB_URI https://relizahub.com
+ENV HUB_URI https://app.relizahub.com
 ENV NAMESPACE allnamespaces
 ENV SENDER_ID default
 ADD https://storage.googleapis.com/kubernetes-release/release/v1.23.14/bin/linux/amd64/kubectl /bin/kubectl
