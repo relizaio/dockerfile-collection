@@ -1,4 +1,4 @@
-FROM alpine/helm:3.7.2 as build-stage
+FROM alpine/helm:3.10.2 as build-stage
 
 RUN apk add unzip
 
@@ -8,7 +8,7 @@ RUN echo 'fad02ffe65e62d908f32e566ab355a6108778eba9b49099156ab92d56b83eb8f  reli
 RUN sha256sum -c shasum
 RUN unzip reliza-cli-2023.01.5-linux-amd64.zip && cp reliza-cli /tmp/
 
-FROM alpine/helm:3.7.2 as artifact-stage
+FROM alpine/helm:3.10.2 as artifact-stage
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
