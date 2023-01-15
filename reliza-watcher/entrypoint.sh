@@ -19,7 +19,7 @@ send_data () {
     for ns in "${NAMESPACES[@]}"; do
         if [ $ns != "NAME" ]
         then
-            kubectl get po -n $ns -o json | jq "[.items[] | {namespace:.metadata.namespace, pod:.metadata.name, status:.status.containerStatuses[]}]" > /resources/images_to_send
+            kubectl get po -n $ns -o json | jq "[.items[] | {namespace:.metadata.namespace, labels:.metadata.labels, annotations:.metadata.annotations, pod:.metadata.name, status:.status.containerStatuses[]}]" > /resources/images_to_send
             echo "$(date) shipping images for $ns namespace"
             
             /app/app instdata -u $relizaHubUri -i $RELIZA_API_ID -k $RELIZA_API_KEY --sender $SENDER_ID$ns --namespace $ns --imagestyle k8s --imagefile /resources/images_to_send
