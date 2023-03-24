@@ -37,7 +37,7 @@ RUN apk add postgresql-client
 RUN aws --version
 RUN psql --version
 COPY ./entrypoint.sh /entrypoint.sh
-RUN chmod 0700 ./entrypoint.sh
+RUN chmod 0770 ./entrypoint.sh
 
 LABEL git_commit $GIT_COMMIT
 LABEL git_branch $GIT_BRANCH
