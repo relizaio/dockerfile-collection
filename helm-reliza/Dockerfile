@@ -2,11 +2,11 @@ FROM alpine/helm:3.12.1 as build-stage
 
 RUN apk add unzip
 
-RUN wget https://d7ge14utcyki8.cloudfront.net/reliza-cli-download/2023.05.14/reliza-cli-2023.05.14-linux-amd64.zip
+RUN wget https://d7ge14utcyki8.cloudfront.net/reliza-cli-download/2023.09.3/reliza-cli-2023.09.3-linux-amd64.zip
 
-RUN echo 'f974a0b4a220c3d3e2d3cea38dce9a20f70a6511cc206c20840a78ed3477dac1  reliza-cli-2023.05.14-linux-amd64.zip' > shasum
+RUN echo '1f56ce27a6929b9f0a3c16291225fed7f52d40cc82e9afee3f03e5b3fe230a07  reliza-cli-2023.09.3-linux-amd64.zip' > shasum
 RUN sha256sum -c shasum
-RUN unzip reliza-cli-2023.05.14-linux-amd64.zip && cp reliza-cli /tmp/
+RUN unzip reliza-cli-2023.09.3-linux-amd64.zip && cp reliza-cli /tmp/
 
 FROM alpine/helm:3.12.1 as artifact-stage
 ARG CI_ENV=noci
