@@ -27,7 +27,6 @@ jobs:
         reliza_api_id: ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }}
         reliza_api_key: ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }}
         path: maven-postgresql
-        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for JQ
       uses: relizaio/reliza-docker-action@1.9
       with:
