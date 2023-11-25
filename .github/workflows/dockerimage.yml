@@ -4,19 +4,9 @@ on: [push]
 
 jobs:
 
-  build:
-
+  build-maven-postgresql:
     runs-on: ubuntu-latest
-
     steps:
-    - name: checkout
-      uses: actions/checkout@v2
-      with:
-        fetch-depth: 100
-    - name: Login to Docker Registry
-      run: echo ${{ secrets.docker_token }} | docker login -u ${{ secrets.docker_login }} --password-stdin
-    - name: Pull Reliza CLI
-      run: docker pull relizaio/reliza-cli
     - name: Build and submit release for Maven Postgresql CI
       uses: relizaio/reliza-docker-action@1.9
       with:
@@ -27,6 +17,9 @@ jobs:
         reliza_api_id: ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }}
         reliza_api_key: ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }}
         path: maven-postgresql
+  build-jq:
+    runs-on: ubuntu-latest
+    steps:
     - name: Build and submit release for JQ
       uses: relizaio/reliza-docker-action@1.9
       with:
@@ -38,6 +31,9 @@ jobs:
         reliza_api_key: ${{ secrets.RELIZA_JQ_API_KEY }}
         path: jq
         platform_architectures: 'linux/amd64,linux/arm64'
+  build-awscli:
+    runs-on: ubuntu-latest
+    steps:
     - name: Build and submit release for AWS CLI v1
       uses: relizaio/reliza-docker-action@1.9
       with:
@@ -49,6 +45,9 @@ jobs:
         reliza_api_key: ${{ secrets.RELIZA_AWSCLI_API_KEY }}
         path: awscli
         platform_architectures: 'linux/amd64,linux/arm64'
+  build-reliza-watcher:
+    runs-on: ubuntu-latest
+    steps:
     - name: Build and submit release for kubectl Reliza Watcher image
       uses: relizaio/reliza-docker-action@1.9
       with:
@@ -60,6 +59,9 @@ jobs:
         reliza_api_key: ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }}
         path: reliza-watcher
         platform_architectures: 'linux/amd64,linux/arm64'
+  build-helmpush:
+    runs-on: ubuntu-latest
+    steps:
     - name: Build and submit release for Reliza Helm Push image
       uses: relizaio/reliza-docker-action@1.9
       with:
@@ -71,6 +73,9 @@ jobs:
         reliza_api_key: ${{ secrets.RELIZA_HELM_PUSH_API_KEY }}
         path: helmpush
         platform_architectures: 'linux/amd64,linux/arm64'
+  build-helm-reliza-cli:
+    runs-on: ubuntu-latest
+    steps:
     - name: Build and submit release for Helm and Reliza CLI image
       uses: relizaio/reliza-docker-action@1.9
       with:
@@ -82,6 +87,9 @@ jobs:
         reliza_api_key: ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }}
         path: helm-reliza
         platform_architectures: 'linux/amd64,linux/arm64'
+  build-psql-awscli:
+    runs-on: ubuntu-latest
+    steps:
     - name: Build and submit release for PostgreSQL AWS CLI
       uses: relizaio/reliza-docker-action@1.9
       with:
@@ -93,6 +101,9 @@ jobs:
         reliza_api_key: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }}
         path: bitnami-postgresql-aws
         platform_architectures: 'linux/amd64,linux/arm64'
+  build-postgres-postgis:
+    runs-on: ubuntu-latest
+    steps:
     - name: Build and submit release for PostgreSQL Postgis
       uses: relizaio/reliza-docker-action@1.9
       with:
@@ -104,6 +115,9 @@ jobs:
         reliza_api_key: ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_KEY }}
         path: postgres-postgis
         platform_architectures: 'linux/amd64,linux/arm64'
+  build-azcopy:
+    runs-on: ubuntu-latest
+    steps:
     - name: Build and submit release for azcopy
       uses: relizaio/reliza-docker-action@1.9
       with:
