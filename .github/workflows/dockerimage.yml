@@ -18,435 +18,101 @@ jobs:
     - name: Pull Reliza CLI
       run: docker pull relizaio/reliza-cli
     - name: Build and submit release for Maven Postgresql CI
-      run: |
-        dir=maven-postgresql
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} -b $GITHUB_REF \
-            --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\ $(cat commit_list) > full_version_output 2>&1
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          docker build . --file maven-postgresql/Dockerfile -t relizaio/maven-postgresql:$vvar_tag -t relizaio/maven-postgresql:latest \
-           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          docker_sha_256=$(docker push relizaio/maven-postgresql:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          # push latest also
-          docker push relizaio/maven-postgresql:latest
-          # finally stream our release metadata back to Reliza
-          echo -n "-b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }} -k ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }} \
-            --artid relizaio/maven-postgresql --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
-            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
-            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          # debug
-          cat reliza_command
-          # send data
-          echo docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command) > rlz_cmd_exec
-          eval $(cat rlz_cmd_exec)
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: maven-postgresql
+        reliza_api_id: ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_MAVEN_POSTGRESQL_API_KEY }}
+        path: maven-postgresql
+        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for JQ
-      run: |
-        dir=jq
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} -b $GITHUB_REF \
-            --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\" $(cat commit_list) > full_version_output 2>&1
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          cd $dir
-          docker build . -t relizaio/jq:$vvar_tag -t relizaio/jq:latest \
-           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          docker_sha_256=$(docker push relizaio/jq:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          # push latest also
-          docker push relizaio/jq:latest
-          # finally stream our release metadata back to Reliza
-          cd ..
-          echo -n "-b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_JQ_API_ID }} -k ${{ secrets.RELIZA_JQ_API_KEY }} \
-            --artid relizaio/jq --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
-            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
-            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          # debug
-          cat reliza_command
-          # send data
-          echo docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command) > rlz_cmd_exec
-          eval $(cat rlz_cmd_exec)
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: jq
+        reliza_api_id: ${{ secrets.RELIZA_JQ_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_JQ_API_KEY }}
+        path: jq
+        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for AWS CLI v1
-      run: |
-        dir=awscli
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} -b $GITHUB_REF \
-            --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\" $(cat commit_list) > full_version_output 2>&1
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          cd awscli
-          docker build . -t relizaio/awscli:$vvar_tag -t relizaio/awscli:latest \
-           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          docker_sha_256=$(docker push relizaio/awscli:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          # push latest also
-          docker push relizaio/awscli:latest
-          # finally stream our release metadata back to Reliza
-          cd ..
-          echo -n "-b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_AWSCLI_API_KEY }} \
-            --artid relizaio/awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
-            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
-            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          # debug
-          cat reliza_command
-          # send data
-          echo docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command) > rlz_cmd_exec
-          eval $(cat rlz_cmd_exec)
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: awscli
+        reliza_api_id: ${{ secrets.RELIZA_AWSCLI_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_AWSCLI_API_KEY }}
+        path: awscli
+        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for kubectl Reliza Watcher image
-      run: |
-        dir=reliza-watcher
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} -b $GITHUB_REF \
-            --commit $GITHUB_SHA --commitmessage \"$(git log -1 --pretty='%s')\" $(cat commit_list) > full_version_output 2>&1 || echo "getting version failed"
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          cd reliza-watcher
-          docker build . -t relizaio/reliza-watcher:$vvar_tag -t relizaio/reliza-watcher:latest \
-           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          echo "debug: after build before push"
-          docker_sha_256=$(docker push relizaio/reliza-watcher:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          echo "new sha 256 $docker_sha_256"
-          # push latest also
-          docker push relizaio/reliza-watcher:latest
-          # finally stream our release metadata back to Reliza
-          cd ..
-          echo -n "-b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }} -k ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }} \
-            --artid relizaio/reliza-watcher --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
-            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
-            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          # debug
-          cat reliza_command
-          # send data
-          echo docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command) > rlz_cmd_exec
-          eval $(cat rlz_cmd_exec)
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: reliza-watcher
+        reliza_api_id: ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_KUBECTL_RELIZA_CLIENT_API_KEY }}
+        path: reliza-watcher
+        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for Reliza Helm Push image
-      run: |
-        dir=helmpush
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} \
-            -b $GITHUB_REF --commit $GITHUB_SHA > full_version_output 2>&1
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          cd $dir
-          docker build . -t relizaio/helmpush:$vvar_tag -t relizaio/helmpush:latest \
-           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          docker_sha_256=$(docker push relizaio/helmpush:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          # push latest also
-          docker push relizaio/helmpush:latest
-          # finally stream our release metadata back to Reliza
-          cd ..
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_HELM_PUSH_API_ID }} -k ${{ secrets.RELIZA_HELM_PUSH_API_KEY }} \
-            --artid relizaio/helmpush --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
-            --artdigests $docker_sha_256
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: helmpush
+        reliza_api_id: ${{ secrets.RELIZA_HELM_PUSH_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_HELM_PUSH_API_KEY }}
+        path: helmpush
+        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for Helm and Reliza CLI image
-      run: |
-        dir=helm-reliza
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} \
-            -b $GITHUB_REF --commit $GITHUB_SHA > full_version_output 2>&1
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          cd helm-reliza
-          docker build . -t relizaio/helm-reliza-cli:$vvar_tag -t relizaio/helm-reliza-cli:latest \
-           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          docker_sha_256=$(docker push relizaio/helm-reliza-cli:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          # push latest also
-          docker push relizaio/helm-reliza-cli:latest
-          # finally stream our release metadata back to Reliza
-          cd ..
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }} -k ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }} \
-            --artid relizaio/helm-reliza-cli --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
-            --artdigests $docker_sha_256
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: helm-reliza-cli
+        reliza_api_id: ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_HELM_RELIZA_CLI_API_KEY }}
+        path: helm-reliza
+        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for PostgreSQL AWS CLI
-      run: |
-        dir=bitnami-postgresql-aws
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }} \
-            -b $GITHUB_REF --commit $GITHUB_SHA > full_version_output 2>&1
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          cd $dir
-          docker build . -t relizaio/psql-awscli:$vvar_tag -t relizaio/psql-awscli:latest \
-           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          docker_sha_256=$(docker push relizaio/psql-awscli:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          # push latest also
-          docker push relizaio/psql-awscli:latest
-          # finally stream our release metadata back to Reliza
-          cd ..
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }} \
-            --artid relizaio/psql-awscli --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
-            --artdigests $docker_sha_256
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: psql-awscli
+        reliza_api_id: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }}
+        path: bitnami-postgresql-aws
+        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for PostgreSQL Postgis
-      run: |
-        dir=postgres-postgis
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_KEY }} \
-            -b $GITHUB_REF --commit $GITHUB_SHA > full_version_output 2>&1
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          cd $dir
-          exit_code=0
-          exit_code1=0
-          docker run --privileged --rm tonistiigi/binfmt --install all
-          docker buildx build --platform linux/amd64 \
-          --cache-from relizaio/postgres-postgis:amd64 \
-          --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA  --build-arg GIT_BRANCH=$GITHUB_REF \
-          --build-arg VERSION=$vvar -f ./Dockerfile \
-          -t relizaio/postgres-postgis:amd64 . || exit_code=$(echo $?)
-          docker push relizaio/postgres-postgis:amd64 || exit_code=$(echo $?)
-          # now build arm image
-          docker buildx build --platform linux/arm64/v8 \
-          --cache-from relizaio/postgres-postgis:armv8 \
-          --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA  --build-arg GIT_BRANCH=$GITHUB_REF \
-          --build-arg VERSION=$vvar -f ./Dockerfile \
-          -t relizaio/postgres-postgis:armv8 . || exit_code=$(echo $?)
-          docker push relizaio/postgres-postgis:armv8 || exit_code1=$(echo $?)
-          docker manifest create relizaio/postgres-postgis relizaio/postgres-postgis:armv8 relizaio/postgres-postgis:amd64
-          docker manifest create relizaio/postgres-postgis:$vvar_tag relizaio/postgres-postgis:armv8 relizaio/postgres-postgis:amd64
-          docker_sha_256=$(docker manifest push relizaio/postgres-postgis:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          # push latest also
-          docker manifest push relizaio/postgres-postgis
-          # finally stream our release metadata back to Reliza
-          cd ..
-          docker run --rm relizaio/reliza-cli addrelease -b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_ID }} -k ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_KEY }} \
-            --artid relizaio/postgres-postgis --artbuildid github$GITHUB_ACTION$GITHUB_SHA --artcimeta GitHub Actions --arttype Docker \
-            --artdigests $docker_sha_256
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: postgres-postgis
+        reliza_api_id: ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_POSTGRESQL_POSTGIS_API_KEY }}
+        path: postgres-postgis
+        platform_architectures: 'linux/amd64,linux/arm64'
     - name: Build and submit release for azcopy
-      run: |
-        dir=azcopy
-        dobuild=false
-        last_commit=$(docker run --rm relizaio/reliza-cli getlatestrelease -i ${{ secrets.RELIZA_AZCOPY_API_ID }} -k ${{ secrets.RELIZA_AZCOPY_API_KEY }} --branch $GITHUB_REF | jq -r ".sourceCodeEntryDetails.commit")
-        if [ ! -z "$last_commit" ]
-        then
-          echo -n "--commits $(git log $last_commit..$GITHUB_SHA --date=iso-strict --pretty='%H|||%ad|||%s' -- $dir | base64 -w 0) " > commit_list
-          difflines=$(git diff $last_commit..$GITHUB_SHA $dir | wc -l)
-          if [ "$difflines" != "0" ]
-          then
-            dobuild=true
-          fi
-        else
-          dobuild=true
-        fi
-        if [ "$dobuild" == "true" ]
-        then
-          # obtain version
-          docker run --rm relizaio/reliza-cli getversion \
-            -i ${{ secrets.RELIZA_AZCOPY_API_ID }} -k ${{ secrets.RELIZA_AZCOPY_API_KEY }} -b $GITHUB_REF \
-            --commit $GITHUB_SHA > full_version_output 2>&1
-          echo "Version response:"
-          cat full_version_output
-          # now construct actual version variable
-          vvar=$(cat full_version_output | jq -r ".version")
-          vvar_tag=$(cat full_version_output | jq -r ".dockerTagSafeVersion")
-          # build and push docker image
-          cd $dir
-          docker build . -t relizaio/azcopy:$vvar_tag -t relizaio/azcopy:latest \
-           --build-arg VERSION=$vvar --build-arg CI_ENV=github$GITHUB_SHA --build-arg GIT_COMMIT=$GITHUB_SHA --build-arg GIT_BRANCH=$GITHUB_REF
-          docker_sha_256=$(docker push relizaio/azcopy:$vvar_tag | grep sha256 | cut -f 3 -d ' ')
-          # push latest also
-          docker push relizaio/azcopy:latest
-          # finally stream our release metadata back to Reliza
-          cd ..
-          echo -n "-b $GITHUB_REF -v $vvar \
-            -i ${{ secrets.RELIZA_AZCOPY_API_ID }} -k ${{ secrets.RELIZA_AZCOPY_API_KEY }} \
-            --artid relizaio/azcopy --artbuildid github$GITHUB_ACTION$GITHUB_SHA \
-            --artbuilduri https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID \
-            --artcimeta GitHub Actions --arttype Docker --artdigests $docker_sha_256 " > reliza_command
-          # debug
-          cat reliza_command
-          # send data
-          echo docker run --rm relizaio/reliza-cli addrelease $(cat reliza_command) > rlz_cmd_exec
-          eval $(cat rlz_cmd_exec)
-        else
-          echo "Artifact is already part of another release, not duplicating"
-        fi
+      uses: relizaio/reliza-docker-action@1.9
+      with:
+        registry_username: ${{ secrets.docker_login }}
+        registry_password: ${{ secrets.docker_token }}
+        image_namespace: relizaio
+        image_name: azcopy
+        reliza_api_id: ${{ secrets.RELIZA_AZCOPY_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_AZCOPY_API_KEY }}
+        path: azcopy
+        platform_architectures: 'linux/amd64,linux/arm64'
