@@ -1,6 +1,7 @@
 From alpine:3.15.4@sha256:a777c9c66ba177ccfea23f2a216ff6721e78a662cd17019488c417135299cd89
-
-ARG AZVERSION=azcopy_linux_amd64_10.15.0
+ARG TARGETOS
+ARG TARGETARCH 
+ARG AZVERSION=azcopy_${TARGETOS}_${TARGETARCH}_10.15.0
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
