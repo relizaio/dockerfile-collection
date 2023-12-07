@@ -9,7 +9,7 @@ RUN sha256sum -c checksum.${TARGETARCH}.txt
 RUN unzip reliza-cli-2023.09.3-linux-${TARGETARCH}.zip
 RUN mv kubectl-${TARGETARCH} kubectl
 
-FROM --platform=$BUILDPLATFORM alpine:3.17.0@sha256:8914eb54f968791faf6a8638949e480fef81e697984fba772b3976835194c6d4 as release-stage
+FROM alpine:3.17.0@sha256:8914eb54f968791faf6a8638949e480fef81e697984fba772b3976835194c6d4 as release-stage
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
