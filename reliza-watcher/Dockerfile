@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM relizaio/reliza-cli:2023.09.7@sha256:12300d578c6f0c3d1cf34ebee58d7b3e1e89c362ab15283fe5dab4661950cf55
+FROM relizaio/reliza-cli:2023.09.7@sha256:12300d578c6f0c3d1cf34ebee58d7b3e1e89c362ab15283fe5dab4661950cf55
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
