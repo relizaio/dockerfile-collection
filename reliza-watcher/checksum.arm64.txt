@@ -1,1 +1,2 @@
+98ddb48ad30ff103bef7df792e4051367bf7848ea121f9ee462e1e9b551e661d  reliza-cli-2023.09.3-linux-arm64.zip
 edf1e17b41891ec15d59dd3cc62bcd2cdce4b0fd9c2ee058b0967b17534457d7  kubectl-arm64
