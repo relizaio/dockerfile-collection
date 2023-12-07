@@ -1,12 +1,12 @@
-FROM relizaio/reliza-cli:2023.09.7@sha256:2998dd9a86485a204b834a589a821fe05130e9861c3381c39351d99775accf45
+FROM --platform=$BUILDPLATFORM relizaio/reliza-cli:2023.09.7@sha256:12300d578c6f0c3d1cf34ebee58d7b3e1e89c362ab15283fe5dab4661950cf55
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
+ARG TARGETARCH
 USER root
 RUN apk add bash jq
 RUN mkdir /resources && chown apprunner:apprunner /resources
-ARG TARGETARCH
 COPY checksum.${TARGETARCH}.txt /
 COPY --chown=apprunner:apprunner entrypoint.sh /
 RUN chmod 0500 /entrypoint.sh
