@@ -44,5 +44,4 @@ LABEL git_branch $GIT_BRANCH
 LABEL ci_environment $CI_ENV
 LABEL version $VERSION
 
-RUN rm /bin/busybox
 ENTRYPOINT /entrypoint.sh
