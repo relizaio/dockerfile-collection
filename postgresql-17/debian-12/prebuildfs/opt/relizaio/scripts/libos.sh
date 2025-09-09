@@ -1,15 +1,15 @@
 #!/bin/bash
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
+# SPDX-License-Identifier: AGPL-3.0-only
 #
 # Library for operating system actions
 
 # shellcheck disable=SC1091
 
 # Load Generic Libraries
-. /opt/bitnami/scripts/liblog.sh
-. /opt/bitnami/scripts/libfs.sh
-. /opt/bitnami/scripts/libvalidations.sh
+. /opt/relizaio/scripts/liblog.sh
+. /opt/relizaio/scripts/libfs.sh
+. /opt/relizaio/scripts/libvalidations.sh
 
 # Functions
 
@@ -337,14 +337,14 @@ convert_to_mb() {
 #########################
 # Redirects output to /dev/null if debug mode is disabled
 # Globals:
-#   BITNAMI_DEBUG
+#   RELIZAIO_DEBUG
 # Arguments:
 #   $@ - Command to execute
 # Returns:
 #   None
 #########################
 debug_execute() {
-    if is_boolean_yes "${BITNAMI_DEBUG:-false}"; then
+    if is_boolean_yes "${RELIZAIO_DEBUG:-false}"; then
         "$@"
     else
         "$@" >/dev/null 2>&1

@@ -1,25 +1,25 @@
 #!/bin/bash
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
+# SPDX-License-Identifier: AGPL-3.0-only
 #
 # Environment configuration for postgresql
 
 # The values for all environment variables will be set in the below order of precedence
-# 1. Custom environment variables defined below after Bitnami defaults
-# 2. Constants defined in this file (environment variables with no default), i.e. BITNAMI_ROOT_DIR
+# 1. Custom environment variables defined below after Relizaio defaults
+# 2. Constants defined in this file (environment variables with no default), i.e. RELIZAIO_ROOT_DIR
 # 3. Environment variables overridden via external files using *_FILE variables (see below)
 # 4. Environment variables set externally (i.e. current Bash context/Dockerfile/userdata)
 
 # Load logging library
 # shellcheck disable=SC1090,SC1091
-. /opt/bitnami/scripts/liblog.sh
+. /opt/relizaio/scripts/liblog.sh
 
-export BITNAMI_ROOT_DIR="/opt/bitnami"
-export BITNAMI_VOLUME_DIR="/bitnami"
+export RELIZAIO_ROOT_DIR="/opt/relizaio"
+export RELIZAIO_VOLUME_DIR="/relizaio"
 
 # Logging configuration
 export MODULE="${MODULE:-postgresql}"
-export BITNAMI_DEBUG="${BITNAMI_DEBUG:-false}"
+export RELIZAIO_DEBUG="${RELIZAIO_DEBUG:-false}"
 
 # By setting an environment variable matching *_FILE to a file path, the prefixed environment
 # variable will be overridden with the value specified in that file
@@ -188,8 +188,8 @@ done
 unset postgresql_env_vars
 
 # Paths
-export POSTGRESQL_VOLUME_DIR="${POSTGRESQL_VOLUME_DIR:-/bitnami/postgresql}"
-export POSTGRESQL_BASE_DIR="/opt/bitnami/postgresql"
+export POSTGRESQL_VOLUME_DIR="${POSTGRESQL_VOLUME_DIR:-/relizaio/postgresql}"
+export POSTGRESQL_BASE_DIR="/opt/relizaio/postgresql"
 POSTGRESQL_DATA_DIR="${POSTGRESQL_DATA_DIR:-"${POSTGRES_DATA_DIR:-}"}"
 POSTGRESQL_DATA_DIR="${POSTGRESQL_DATA_DIR:-"${PGDATA:-}"}"
 export POSTGRESQL_DATA_DIR="${POSTGRESQL_DATA_DIR:-${POSTGRESQL_VOLUME_DIR}/data}"
@@ -206,7 +206,7 @@ export POSTGRESQL_PID_FILE="$POSTGRESQL_TMP_DIR/postgresql.pid"
 export POSTGRESQL_BIN_DIR="$POSTGRESQL_BASE_DIR/bin"
 export POSTGRESQL_INITSCRIPTS_DIR="/docker-entrypoint-initdb.d"
 export POSTGRESQL_PREINITSCRIPTS_DIR="/docker-entrypoint-preinitdb.d"
-export PATH="${POSTGRESQL_BIN_DIR}:${BITNAMI_ROOT_DIR}/common/bin:${PATH}"
+export PATH="${POSTGRESQL_BIN_DIR}:${RELIZAIO_ROOT_DIR}/common/bin:${PATH}"
 
 # System users (when running with a privileged user)
 export POSTGRESQL_DAEMON_USER="postgres"
@@ -311,7 +311,7 @@ export POSTGRESQL_TLS_CRL_FILE="${POSTGRESQL_TLS_CRL_FILE:-}"
 POSTGRESQL_TLS_PREFER_SERVER_CIPHERS="${POSTGRESQL_TLS_PREFER_SERVER_CIPHERS:-"${POSTGRES_TLS_PREFER_SERVER_CIPHERS:-}"}"
 export POSTGRESQL_TLS_PREFER_SERVER_CIPHERS="${POSTGRESQL_TLS_PREFER_SERVER_CIPHERS:-yes}"
 POSTGRESQL_SHARED_PRELOAD_LIBRARIES="${POSTGRESQL_SHARED_PRELOAD_LIBRARIES:-"${POSTGRES_SHARED_PRELOAD_LIBRARIES:-}"}"
-export POSTGRESQL_SHARED_PRELOAD_LIBRARIES="${POSTGRESQL_SHARED_PRELOAD_LIBRARIES:-pgaudit}"
+export POSTGRESQL_SHARED_PRELOAD_LIBRARIES="${POSTGRESQL_SHARED_PRELOAD_LIBRARIES:-}"
 POSTGRESQL_PGAUDIT_LOG="${POSTGRESQL_PGAUDIT_LOG:-"${POSTGRES_PGAUDIT_LOG:-}"}"
 export POSTGRESQL_PGAUDIT_LOG="${POSTGRESQL_PGAUDIT_LOG:-}"
 POSTGRESQL_PGAUDIT_LOG_CATALOG="${POSTGRESQL_PGAUDIT_LOG_CATALOG:-"${POSTGRES_PGAUDIT_LOG_CATALOG:-}"}"
@@ -374,6 +374,6 @@ export POSTGRESQL_PGBACKREST_CONF_FILE="${POSTGRESQL_DATA_DIR}/pgbackrest.conf"
 
 # Internal
 export POSTGRESQL_FIRST_BOOT="yes"
-export NSS_WRAPPER_LIB="/opt/bitnami/common/lib/libnss_wrapper.so"
+export NSS_WRAPPER_LIB="/opt/relizaio/common/lib/libnss_wrapper.so"
 
 # Custom environment variables may be defined below

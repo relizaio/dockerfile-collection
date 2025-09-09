@@ -1,0 +1,33 @@
+on:
+  push:
+    branches:
+      - '*'
+    tags-ignore:
+      - '*'
+
+name: Build Component Container Images And Submit Metadata To Reliza Hub
+
+jobs:
+  build-postgresql:
+    permissions:
+      id-token: write
+    name: Build And Push ReARM PostgreSQL
+    runs-on: ubuntu-latest
+    steps:
+      - name: RelizaHub Build And Submit ReARM PostgreSQL Release
+        uses: relizaio/reliza-docker-action@351b31ac6bb2a1903d35e60ed020b1a39cadd377 # v3.10
+        with:
+          registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
+          registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
+          registry_host: registry.relizahub.com
+          image_namespace: registry.relizahub.com/library
+          image_name: rearm-postgres
+          reliza_api_id: ${{ secrets.RELIZA_REARM_POSTGRES_API_ID }}
+          reliza_api_key: ${{ secrets.RELIZA_REARM_POSTGRES_API_KEY }}
+          path: postgresql-17/debian-12
+          enable_sbom: 'true'
+          push_to_rearm: 'true'
+          rearm_api_id: ${{ secrets.REARM_REARM_POSTGRES_API_ID }}
+          rearm_api_key: ${{ secrets.REARM_REARM_POSTGRES_API_KEY }}
+          source_code_sbom_type: 'none'
+          rearm_enable_public_cosign_sigstore: 'true'

@@ -1,13 +1,13 @@
 #!/bin/bash
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
+# SPDX-License-Identifier: AGPL-3.0-only
 #
-# Bitnami web server handler library
+# Relizaio web server handler library
 
 # shellcheck disable=SC1090,SC1091
 
 # Load generic libraries
-. /opt/bitnami/scripts/liblog.sh
+. /opt/relizaio/scripts/liblog.sh
 
 ########################
 # Execute a command (or list of commands) with the web server environment and library loaded
@@ -23,8 +23,8 @@ web_server_execute() {
     shift
     # Run program in sub-shell to avoid web server environment getting loaded when not necessary
     (
-        . "/opt/bitnami/scripts/lib${web_server}.sh"
-        . "/opt/bitnami/scripts/${web_server}-env.sh"
+        . "/opt/relizaio/scripts/lib${web_server}.sh"
+        . "/opt/relizaio/scripts/${web_server}-env.sh"
         "$@"
     )
 }
@@ -42,7 +42,7 @@ web_server_list() {
     local -r -a supported_web_servers=(apache nginx)
     local -a existing_web_servers=()
     for web_server in "${supported_web_servers[@]}"; do
-        [[ -f "/opt/bitnami/scripts/${web_server}-env.sh" ]] && existing_web_servers+=("$web_server")
+        [[ -f "/opt/relizaio/scripts/${web_server}-env.sh" ]] && existing_web_servers+=("$web_server")
     done
     echo "${existing_web_servers[@]:-}"
 }
@@ -84,7 +84,7 @@ web_server_validate() {
     if [[ -z "$(web_server_type)" || ! " ${supported_web_servers[*]} " == *" $(web_server_type) "* ]]; then
         print_validation_error "Could not detect any supported web servers. It must be one of: ${supported_web_servers[*]}"
     elif ! web_server_execute "$(web_server_type)" type -t "is_$(web_server_type)_running" >/dev/null; then
-        print_validation_error "Could not load the $(web_server_type) web server library from /opt/bitnami/scripts. Check that it exists and is readable."
+        print_validation_error "Could not load the $(web_server_type) web server library from /opt/relizaio/scripts. Check that it exists and is readable."
     fi
 
     return "$error_code"
@@ -114,10 +114,10 @@ is_web_server_running() {
 #########################
 web_server_start() {
     info "Starting $(web_server_type) in background"
-    if [[ "${BITNAMI_SERVICE_MANAGER:-}" = "systemd" ]]; then
-        systemctl start "bitnami.$(web_server_type).service"
+    if [[ "${RELIZAIO_SERVICE_MANAGER:-}" = "systemd" ]]; then
+        systemctl start "relizaio.$(web_server_type).service"
     else
-        "${BITNAMI_ROOT_DIR}/scripts/$(web_server_type)/start.sh"
+        "${RELIZAIO_ROOT_DIR}/scripts/$(web_server_type)/start.sh"
     fi
 }
 
@@ -132,10 +132,10 @@ web_server_start() {
 #########################
 web_server_stop() {
     info "Stopping $(web_server_type)"
-    if [[ "${BITNAMI_SERVICE_MANAGER:-}" = "systemd" ]]; then
-        systemctl stop "bitnami.$(web_server_type).service"
+    if [[ "${RELIZAIO_SERVICE_MANAGER:-}" = "systemd" ]]; then
+        systemctl stop "relizaio.$(web_server_type).service"
     else
-        "${BITNAMI_ROOT_DIR}/scripts/$(web_server_type)/stop.sh"
+        "${RELIZAIO_ROOT_DIR}/scripts/$(web_server_type)/stop.sh"
     fi
 }
 

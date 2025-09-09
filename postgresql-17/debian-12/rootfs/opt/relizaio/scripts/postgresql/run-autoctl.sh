@@ -1,6 +1,6 @@
 #!/bin/bash
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
+# SPDX-License-Identifier: AGPL-3.0-only
 
 # shellcheck disable=SC1091
 
@@ -10,12 +10,12 @@ set -o pipefail
 # set -o xtrace # Uncomment this line for debugging purposes
 
 # Load libraries
-. /opt/bitnami/scripts/libpostgresql.sh
-. /opt/bitnami/scripts/libautoctl.sh
-. /opt/bitnami/scripts/libos.sh
+. /opt/relizaio/scripts/libpostgresql.sh
+. /opt/relizaio/scripts/libautoctl.sh
+. /opt/relizaio/scripts/libos.sh
 
 # Load PostgreSQL environment variables
-. /opt/bitnami/scripts/postgresql-env.sh
+. /opt/relizaio/scripts/postgresql-env.sh
 
 export HOME="$POSTGRESQL_AUTOCTL_VOLUME_DIR"
 

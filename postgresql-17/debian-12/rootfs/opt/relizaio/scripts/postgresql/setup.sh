@@ -1,8 +1,8 @@
 #!/bin/bash
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
+# SPDX-License-Identifier: AGPL-3.0-only
 #
-# Bitnami PostgreSQL setup
+# Relizaio PostgreSQL setup
 
 # shellcheck disable=SC1091
 
@@ -11,13 +11,13 @@ set -o nounset
 set -o pipefail
 
 # Load libraries
-. /opt/bitnami/scripts/liblog.sh
-. /opt/bitnami/scripts/libos.sh
-. /opt/bitnami/scripts/libvalidations.sh
-. /opt/bitnami/scripts/libpostgresql.sh
+. /opt/relizaio/scripts/liblog.sh
+. /opt/relizaio/scripts/libos.sh
+. /opt/relizaio/scripts/libvalidations.sh
+. /opt/relizaio/scripts/libpostgresql.sh
 
 # Load PostgreSQL environment variables
-. /opt/bitnami/scripts/postgresql-env.sh
+. /opt/relizaio/scripts/postgresql-env.sh
 
 # Ensure PostgreSQL environment variables settings are valid
 postgresql_validate

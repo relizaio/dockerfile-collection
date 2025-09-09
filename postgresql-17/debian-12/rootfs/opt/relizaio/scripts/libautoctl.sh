@@ -7,7 +7,7 @@
 # shellcheck disable=SC1090,SC1091
 
 # Load PostgreSQL library
-. /opt/bitnami/scripts/libpostgresql.sh
+. /opt/relizaio/scripts/libpostgresql.sh
 
 ########################
 # Change pg_hba.conf so it allows access from replication users

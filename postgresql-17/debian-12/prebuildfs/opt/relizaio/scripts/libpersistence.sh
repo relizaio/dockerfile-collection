@@ -1,25 +1,25 @@
 #!/bin/bash
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
+# SPDX-License-Identifier: AGPL-3.0-only
 #
-# Bitnami persistence library
+# Relizaio persistence library
 # Used for bringing persistence capabilities to applications that don't have clear separation of data and logic
 
 # shellcheck disable=SC1091
 
 # Load Generic Libraries
-. /opt/bitnami/scripts/libfs.sh
-. /opt/bitnami/scripts/libos.sh
-. /opt/bitnami/scripts/liblog.sh
-. /opt/bitnami/scripts/libversion.sh
+. /opt/relizaio/scripts/libfs.sh
+. /opt/relizaio/scripts/libos.sh
+. /opt/relizaio/scripts/liblog.sh
+. /opt/relizaio/scripts/libversion.sh
 
 # Functions
 
 ########################
 # Persist an application directory
 # Globals:
-#   BITNAMI_ROOT_DIR
-#   BITNAMI_VOLUME_DIR
+#   RELIZAIO_ROOT_DIR
+#   RELIZAIO_VOLUME_DIR
 # Arguments:
 #   $1 - App folder name
 #   $2 - List of app files to persist
@@ -30,8 +30,8 @@ persist_app() {
     local -r app="${1:?missing app}"
     local -a files_to_restore
     read -r -a files_to_persist <<< "$(tr ',;:' ' ' <<< "$2")"
-    local -r install_dir="${BITNAMI_ROOT_DIR}/${app}"
-    local -r persist_dir="${BITNAMI_VOLUME_DIR}/${app}"
+    local -r install_dir="${RELIZAIO_ROOT_DIR}/${app}"
+    local -r persist_dir="${RELIZAIO_VOLUME_DIR}/${app}"
     # Persist the individual files
     if [[ "${#files_to_persist[@]}" -le 0 ]]; then
         warn "No files are configured to be persisted"
@@ -73,8 +73,8 @@ persist_app() {
 ########################
 # Restore a persisted application directory
 # Globals:
-#   BITNAMI_ROOT_DIR
-#   BITNAMI_VOLUME_DIR
+#   RELIZAIO_ROOT_DIR
+#   RELIZAIO_VOLUME_DIR
 #   FORCE_MAJOR_UPGRADE
 # Arguments:
 #   $1 - App folder name
@@ -86,8 +86,8 @@ restore_persisted_app() {
     local -r app="${1:?missing app}"
     local -a files_to_restore
     read -r -a files_to_restore <<< "$(tr ',;:' ' ' <<< "$2")"
-    local -r install_dir="${BITNAMI_ROOT_DIR}/${app}"
-    local -r persist_dir="${BITNAMI_VOLUME_DIR}/${app}"
+    local -r install_dir="${RELIZAIO_ROOT_DIR}/${app}"
+    local -r persist_dir="${RELIZAIO_VOLUME_DIR}/${app}"
     # Restore the individual persisted files
     if [[ "${#files_to_restore[@]}" -le 0 ]]; then
         warn "No persisted files are configured to be restored"
@@ -107,7 +107,7 @@ restore_persisted_app() {
 ########################
 # Check if an application directory was already persisted
 # Globals:
-#   BITNAMI_VOLUME_DIR
+#   RELIZAIO_VOLUME_DIR
 # Arguments:
 #   $1 - App folder name
 # Returns:
@@ -115,7 +115,7 @@ restore_persisted_app() {
 #########################
 is_app_initialized() {
     local -r app="${1:?missing app}"
-    local -r persist_dir="${BITNAMI_VOLUME_DIR}/${app}"
+    local -r persist_dir="${RELIZAIO_VOLUME_DIR}/${app}"
     if ! is_mounted_dir_empty "$persist_dir"; then
         true
     else

@@ -2,18 +2,18 @@
 # Copyright Broadcom, Inc. All Rights Reserved.
 # SPDX-License-Identifier: APACHE-2.0
 #
-# Bitnami PostgreSQL library
+# Relizaio PostgreSQL library
 
 # shellcheck disable=SC1090,SC1091
 
 # Load Generic Libraries
-. /opt/bitnami/scripts/libfile.sh
-. /opt/bitnami/scripts/libfs.sh
-. /opt/bitnami/scripts/liblog.sh
-. /opt/bitnami/scripts/libos.sh
-. /opt/bitnami/scripts/libservice.sh
-. /opt/bitnami/scripts/libvalidations.sh
-. /opt/bitnami/scripts/libnet.sh
+. /opt/relizaio/scripts/libfile.sh
+. /opt/relizaio/scripts/libfs.sh
+. /opt/relizaio/scripts/liblog.sh
+. /opt/relizaio/scripts/libos.sh
+. /opt/relizaio/scripts/libservice.sh
+. /opt/relizaio/scripts/libvalidations.sh
+. /opt/relizaio/scripts/libnet.sh
 
 ########################
 # Configure libnss_wrapper so PostgreSQL commands work with a random user.
@@ -443,11 +443,8 @@ postgresql_configure_replication_parameters() {
     postgresql_set_property "wal_level" "$POSTGRESQL_WAL_LEVEL"
     postgresql_set_property "max_wal_size" "400MB"
     postgresql_set_property "max_wal_senders" "16"
-    if ((psql_major_version >= 13)); then
-        postgresql_set_property "wal_keep_size" "128MB"
-    else
-        postgresql_set_property "wal_keep_segments" "12"
-    fi
+    # PostgreSQL 17 uses wal_keep_size instead of wal_keep_segments
+    postgresql_set_property "wal_keep_size" "128MB"
     postgresql_set_property "hot_standby" "on"
 
     if is_boolean_yes "$POSTGRESQL_REPLICATION_USE_PASSFILE" && [[ ! -f "${POSTGRESQL_REPLICATION_PASSFILE_PATH}" ]]; then
@@ -863,7 +860,7 @@ postgresql_start_bg() {
         pg_ctl_cmd+=("run_as_user" "$POSTGRESQL_DAEMON_USER")
     fi
     pg_ctl_cmd+=("$POSTGRESQL_BIN_DIR"/pg_ctl)
-    if [[ "${BITNAMI_DEBUG:-false}" = true ]] || [[ $pg_logs = true ]]; then
+    if [[ "${RELIZAIO_DEBUG:-false}" = true ]] || [[ $pg_logs = true ]]; then
         "${pg_ctl_cmd[@]}" "start" "${pg_ctl_flags[@]}"
     else
         "${pg_ctl_cmd[@]}" "start" "${pg_ctl_flags[@]}" >/dev/null 2>&1
@@ -941,12 +938,12 @@ postgresql_master_init_db() {
     initdb_cmd+=("$POSTGRESQL_BIN_DIR/initdb")
     if [[ -n "${initdb_args[*]:-}" ]]; then
         info "Initializing PostgreSQL with ${initdb_args[*]} extra initdb arguments"
-        if [[ "${BITNAMI_DEBUG:-false}" = true ]]; then
+        if [[ "${RELIZAIO_DEBUG:-false}" = true ]]; then
             "${initdb_cmd[@]}" -E UTF8 -D "$POSTGRESQL_DATA_DIR" -U "postgres" "${initdb_args[@]}"
         else
             "${initdb_cmd[@]}" -E UTF8 -D "$POSTGRESQL_DATA_DIR" -U "postgres" "${initdb_args[@]}" >/dev/null 2>&1
         fi
-    elif [[ "${BITNAMI_DEBUG:-false}" = true ]]; then
+    elif [[ "${RELIZAIO_DEBUG:-false}" = true ]]; then
         "${initdb_cmd[@]}" -E UTF8 -D "$POSTGRESQL_DATA_DIR" -U "postgres"
     else
         "${initdb_cmd[@]}" -E UTF8 -D "$POSTGRESQL_DATA_DIR" -U "postgres" >/dev/null 2>&1
@@ -1117,7 +1114,7 @@ postgresql_remove_pghba_lines() {
 #   String
 #########################
 postgresql_get_major_version() {
-    psql --version | grep -oE "[0-9]+\.[0-9]+" | grep -oE "^[0-9]+"
+    psql --version | grep -oE "[0-9]+" | head -1
 }
 
 ########################
@@ -1144,7 +1141,7 @@ get_env_var_value() {
 # Stdin:
 #   Query/queries to execute
 # Globals:
-#   BITNAMI_DEBUG
+#   RELIZAIO_DEBUG
 #   POSTGRESQL_*
 # Arguments:
 #   $1 - Database where to run the queries
@@ -1174,7 +1171,7 @@ postgresql_execute_print_output() {
 # Stdin:
 #   Query/queries to execute
 # Globals:
-#   BITNAMI_DEBUG
+#   RELIZAIO_DEBUG
 #   POSTGRESQL_*
 # Arguments:
 #   $1 - Database where to run the queries
@@ -1185,7 +1182,7 @@ postgresql_execute_print_output() {
 #   None
 #########################
 postgresql_execute() {
-    if [[ "${BITNAMI_DEBUG:-false}" = true ]]; then
+    if [[ "${RELIZAIO_DEBUG:-false}" = true ]]; then
         "postgresql_execute_print_output" "$@"
     elif [[ "${NO_ERRORS:-false}" = true ]]; then
         "postgresql_execute_print_output" "$@" 2>/dev/null
@@ -1199,7 +1196,7 @@ postgresql_execute() {
 # Stdin:
 #   Query/queries to execute
 # Globals:
-#   BITNAMI_DEBUG
+#   RELIZAIO_DEBUG
 #   DB_*
 # Arguments:
 #   $1 - Remote PostgreSQL service hostname
@@ -1223,7 +1220,7 @@ postgresql_remote_execute_print_output() {
 # Stdin:
 #   Query/queries to execute
 # Globals:
-#   BITNAMI_DEBUG
+#   RELIZAIO_DEBUG
 #   DB_*
 # Arguments:
 #   $1 - Remote PostgreSQL service hostname
@@ -1235,7 +1232,7 @@ postgresql_remote_execute_print_output() {
 # Returns:
 #   None
 postgresql_remote_execute() {
-    if [[ "${BITNAMI_DEBUG:-false}" = true ]]; then
+    if [[ "${RELIZAIO_DEBUG:-false}" = true ]]; then
         "postgresql_remote_execute_print_output" "$@"
     elif [[ "${NO_ERRORS:-false}" = true ]]; then
         "postgresql_remote_execute_print_output" "$@" 2>/dev/null
