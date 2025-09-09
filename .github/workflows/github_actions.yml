@@ -24,7 +24,7 @@ jobs:
           image_name: rearm-postgres
           reliza_api_id: ${{ secrets.RELIZA_REARM_POSTGRES_API_ID }}
           reliza_api_key: ${{ secrets.RELIZA_REARM_POSTGRES_API_KEY }}
-          path: postgresql-17/debian-12
+          path: postgresql-17/debian-13
           enable_sbom: 'true'
           push_to_rearm: 'true'
           rearm_api_id: ${{ secrets.REARM_REARM_POSTGRES_API_ID }}
