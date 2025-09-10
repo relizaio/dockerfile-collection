@@ -1,6 +1,6 @@
 #!/bin/bash
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 #
 # Bitnami pg_auto_failover library
 

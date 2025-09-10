@@ -1,6 +1,6 @@
 #!/bin/bash
-# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
-# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 #
 # Relizaio persistence library
 # Used for bringing persistence capabilities to applications that don't have clear separation of data and logic

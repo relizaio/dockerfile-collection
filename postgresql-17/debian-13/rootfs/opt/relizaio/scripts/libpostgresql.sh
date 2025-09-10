@@ -1,6 +1,6 @@
 #!/bin/bash
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 #
 # Relizaio PostgreSQL library
 
@@ -1099,8 +1099,8 @@ postgresql_remove_pghba_lines() {
     done
 }
 
-# Copyright Broadcom, Inc. All Rights Reserved.
-# SPDX-License-Identifier: APACHE-2.0
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 
 # shellcheck disable=SC2148
 

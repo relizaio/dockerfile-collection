@@ -1,4 +1,4 @@
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PostgreSQL Version](https://img.shields.io/badge/PostgreSQL-17.6-blue.svg)](https://www.postgresql.org/)
 [![Debian Version](https://img.shields.io/badge/Debian-12.12-blue.svg)](https://www.debian.org/)
 
@@ -63,7 +63,7 @@ See [bitnami-vs-selfhosted-extensions.md](bitnami-vs-selfhosted-extensions.md) f
 
 ## License
 
-Licensed under AGPL-3.0-only.
+Licensed under MIT.
 
 ---
 

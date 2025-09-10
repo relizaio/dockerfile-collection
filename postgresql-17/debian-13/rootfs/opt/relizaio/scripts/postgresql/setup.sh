@@ -1,6 +1,6 @@
 #!/bin/bash
-# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
-# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 #
 # Relizaio PostgreSQL setup
 

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
-# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 #
 # Library for managing services
 
@@ -132,8 +132,8 @@ generate_cron_conf() {
     mkdir -p /etc/cron.d
     if "$clean"; then
         cat > "/etc/cron.d/${service_name}" <<EOF
-# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
-# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 
 ${schedule} ${run_as} ${cmd}
 EOF
@@ -181,8 +181,8 @@ generate_logrotate_conf() {
 
     mkdir -p "$logrotate_conf_dir"
     cat <<EOF | sed '/^\s*$/d' > "${logrotate_conf_dir}/${service_name}"
-# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
-# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 
 ${log_path} {
   ${period}
@@ -328,8 +328,8 @@ generate_systemd_conf() {
     fi
     # Generate the Systemd unit
     cat > "$service_file" <<EOF
-# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of AGPL-3.0-only.
-# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
 
 [Unit]
 Description=Relizaio service for ${name}
