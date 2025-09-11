@@ -698,6 +698,25 @@ postgresql_initialize() {
     if ! is_dir_empty "$POSTGRESQL_DATA_DIR"; then
         info "Deploying PostgreSQL with persisted data..."
         export POSTGRESQL_FIRST_BOOT="no"
+        
+        # CRITICAL FIX: Ensure authentication works with persistent storage
+        # Start PostgreSQL temporarily to handle user/password management
+        postgresql_start_bg "false"
+        
+        # Ensure postgres user password is set (idempotent)
+        if [[ "$POSTGRESQL_USERNAME" = "postgres" ]]; then
+            [[ -n "$POSTGRESQL_PASSWORD" ]] && postgresql_alter_postgres_user "$POSTGRESQL_PASSWORD"
+        else
+            # Handle both postgres and custom user passwords
+            if [[ -n "$POSTGRESQL_POSTGRES_PASSWORD" ]]; then
+                postgresql_alter_postgres_user "$POSTGRESQL_POSTGRES_PASSWORD"
+            fi
+            # Ensure custom user exists (idempotent)
+            postgresql_ensure_user_database
+        fi
+        
+        postgresql_stop
+        
         is_boolean_yes "$create_pghba_file" && postgresql_restrict_pghba
         is_boolean_yes "$create_conf_file" && postgresql_configure_replication_parameters
         is_boolean_yes "$create_conf_file" && postgresql_configure_fsync
@@ -1402,5 +1421,40 @@ postgresql_get_waldir() {
     else
         # Uninitialized - using value from $POSTGRESQL_INITDB_WAL_DIR if set
         echo "$POSTGRESQL_INITDB_WAL_DIR"
+    fi
+}
+
+########################
+# Ensure user and database exist (idempotent)
+# Globals:
+#   POSTGRESQL_*
+# Arguments:
+#   None
+# Returns:
+#   None
+#########################
+postgresql_ensure_user_database() {
+    local user_exists db_exists
+    
+    # Check if custom user exists, create if not
+    if [[ -n "$POSTGRESQL_USERNAME" ]] && [[ "$POSTGRESQL_USERNAME" != "postgres" ]]; then
+        user_exists=$(postgresql_execute "postgres" "postgres" "$POSTGRESQL_POSTGRES_PASSWORD" <<< "SELECT 1 FROM pg_roles WHERE rolname='$POSTGRESQL_USERNAME';" 2>/dev/null | grep -c "1" || echo "0")
+        if [[ "$user_exists" == "0" ]]; then
+            info "Creating user '$POSTGRESQL_USERNAME'..."
+            postgresql_create_admin_user
+        else
+            debug "User '$POSTGRESQL_USERNAME' already exists"
+        fi
+    fi
+    
+    # Check if custom database exists, create if not  
+    if [[ -n "$POSTGRESQL_DATABASE" ]] && [[ "$POSTGRESQL_DATABASE" != "postgres" ]]; then
+        db_exists=$(postgresql_execute "postgres" "postgres" "$POSTGRESQL_POSTGRES_PASSWORD" <<< "SELECT 1 FROM pg_database WHERE datname='$POSTGRESQL_DATABASE';" 2>/dev/null | grep -c "1" || echo "0")
+        if [[ "$db_exists" == "0" ]]; then
+            info "Creating database '$POSTGRESQL_DATABASE'..."
+            postgresql_create_custom_database "$POSTGRESQL_DATABASE"
+        else
+            debug "Database '$POSTGRESQL_DATABASE' already exists"
+        fi
     fi
 }
