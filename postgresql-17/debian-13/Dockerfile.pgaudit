@@ -24,7 +24,7 @@ SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
 # Combined package installation and PostgreSQL setup to reduce layers
 RUN install_packages ca-certificates=20250419 curl=8.14.1-2 libbsd0 libbz2-1.0 libedit2 libffi8 libgcc-s1=14.2.0-19 libgmp10 libgnutls30 libhogweed6 libicu76=76.1-4 libidn2-0 libldap-common=2.6.10+dfsg-1 liblz4-1 liblzma5 libmd0 libnettle8 libp11-kit0 libpcre2-8-0=10.46-1~deb13u1 libreadline8t64=8.2-6 libsasl2-2 libsqlite3-0 libssl3t64=3.5.1-1 libstdc++6=14.2.0-19 libtasn1-6 libtinfo6 libunistring5=1.3-2 libuuid1 libxml2=2.12.7+dfsg+really2.9.14-2.1+deb13u1 libxslt1.1=1.1.35-1.2+deb13u1 libzstd1=1.5.7+dfsg-1 locales=2.41-12 procps=2:4.0.4-9 zlib1g=1:1.3.dfsg+really1.3.1-1+b1 && \
     # Add PostgreSQL repository and install PostgreSQL
-    apt-get update && apt-get install -y wget gnupg2 && \
+    apt-get update && apt-get install -y wget gnupg2 git build-essential postgresql-server-dev-17 libkrb5-dev && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
     echo 'deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt/ trixie-pgdg main' > /etc/apt/sources.list.d/pgdg.list && \
     apt-get update && \
@@ -32,11 +32,17 @@ RUN install_packages ca-certificates=20250419 curl=8.14.1-2 libbsd0 libbz2-1.0 l
         postgresql-17=17.6-1.pgdg13+1 \
         postgresql-client-17=17.6-1.pgdg13+1 && \
     apt-mark hold postgresql-17 postgresql-client-17 && \
-    # Setup PostgreSQL directories and permissions
+    # Setup PostgreSQL directories and permissions first
     mkdir -p /opt/relizaio/postgresql/{bin,share,conf,conf.default,logs,tmp} && \
     ln -sf /usr/lib/postgresql/17/bin/* /opt/relizaio/postgresql/bin/ && \
     cp /usr/share/postgresql/17/postgresql.conf.sample /opt/relizaio/postgresql/share/postgresql.conf.sample && \
     cp /usr/share/postgresql/17/postgresql.conf.sample /opt/relizaio/postgresql/conf/postgresql.conf && \
+    # Install pgAudit extension after PostgreSQL setup
+    git clone --depth 1 --branch REL_17_STABLE https://github.com/pgaudit/pgaudit.git /tmp/pgaudit && \
+    cd /tmp/pgaudit && \
+    make USE_PGXS=1 && \
+    make USE_PGXS=1 install && \
+    rm -rf /tmp/pgaudit && \
     usermod -u 1001 postgres && \
     groupmod -g 1001 postgres && \
     mkdir -p /var/run/postgresql && \
@@ -49,7 +55,7 @@ RUN install_packages ca-certificates=20250419 curl=8.14.1-2 libbsd0 libbz2-1.0 l
     locale-gen && \
     echo 'LANG=C.UTF-8' > /etc/default/locale && \
     # Cleanup build-only packages and cache
-    apt-get remove -y wget gnupg2 curl && \
+    apt-get remove -y wget gnupg2 curl git build-essential postgresql-server-dev-17 libkrb5-dev && \
     apt-get autoremove -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /var/tmp/*
@@ -66,6 +72,11 @@ ENV APP_VERSION="17.6.0" \
     NSS_WRAPPER_LIB="/opt/relizaio/common/lib/libnss_wrapper.so" \
     PATH="/opt/relizaio/postgresql/bin:$PATH"
 
+ENV POSTGRESQL_VOLUME_DIR="/relizaio/postgresql" \
+    POSTGRESQL_DATA_DIR="/opt/relizaio/postgresql/data" \
+    POSTGRESQL_SHARED_PRELOAD_LIBRARIES="pgaudit" \
+    PATH="/opt/relizaio/postgresql/bin:$PATH"
+
 VOLUME [ "/relizaio/postgresql", "/docker-entrypoint-initdb.d", "/docker-entrypoint-preinitdb.d" ]
 
 EXPOSE 5432
@@ -74,10 +85,10 @@ USER 1001
 
 LABEL org.opencontainers.image.base.name="docker.io/library/debian:13.1-slim" \
       org.opencontainers.image.created="2025-09-07T02:20:20Z" \
-      org.opencontainers.image.description="Application packaged by Reliza Incorporated" \
+      org.opencontainers.image.description="Application packaged by Reliza Incorporated with pgAudit extension" \
       org.opencontainers.image.documentation="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17/README.md" \
       org.opencontainers.image.source="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17" \
-      org.opencontainers.image.title="postgresql" \
+      org.opencontainers.image.title="postgresql-pgaudit" \
       org.opencontainers.image.vendor="Reliza Incorporated" \
       org.opencontainers.image.version="17.6.0"
 LABEL org.opencontainers.image.revision $GIT_COMMIT
@@ -85,8 +96,9 @@ LABEL git_branch $GIT_BRANCH
 LABEL ci_environment $CI_ENV
 LABEL org.opencontainers.image.version $VERSION
 LABEL org.opencontainers.image.vendor Reliza
-LABEL org.opencontainers.image.title "ReARM PostgreSQL"
+LABEL org.opencontainers.image.title "ReARM PostgreSQL with pgAudit"
 LABEL PG_VERSION "17.6-1.pgdg13+1"
+LABEL PGAUDIT_VERSION "REL_17_STABLE"
 
 
 ENTRYPOINT [ "/opt/relizaio/scripts/postgresql/entrypoint.sh" ]
