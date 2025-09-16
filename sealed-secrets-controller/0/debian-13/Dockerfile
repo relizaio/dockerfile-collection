@@ -17,7 +17,7 @@ RUN --mount=type=secret,id=downloads_url,env=SECRET_DOWNLOADS_URL \
     DOWNLOADS_URL=${SECRET_DOWNLOADS_URL:-${DOWNLOADS_URL}} ; \
     mkdir -p /tmp/bitnami/pkg/cache/ ; cd /tmp/bitnami/pkg/cache/ || exit 1 ; \
     COMPONENTS=( \
-      "sealed-secrets-0.31.0-1-linux-${OS_ARCH}-debian-12" \
+      "sealed-secrets-0.32.2-0-linux-${OS_ARCH}-debian-12" \
     ) ; \
     for COMPONENT in "${COMPONENTS[@]}"; do \
       if [ ! -f "${COMPONENT}.tar.gz" ]; then \
@@ -50,9 +50,9 @@ COPY --from=builder /opt/bitnami/sealed-secrets/.spdx-sealed-secrets.spdx /opt/b
 COPY --from=builder /opt/bitnami/sealed-secrets/bin/controller /opt/bitnami/sealed-secrets/bin/controller
 COPY --from=builder /opt/bitnami/sealed-secrets/licenses /opt/bitnami/sealed-secrets/licenses
 
-ENV APP_VERSION="0.31.0" \
+ENV APP_VERSION="0.32.2" \
     BITNAMI_APP_NAME="sealed-secrets-controller" \
-    IMAGE_REVISION="1" \
+    IMAGE_REVISION="0" \
     PATH="/opt/bitnami/sealed-secrets/bin:$PATH"
 
 LABEL org.opencontainers.image.base.name="scratch"
@@ -62,7 +62,7 @@ LABEL ci_environment=$CI_ENV
 LABEL org.opencontainers.image.version=$VERSION
 LABEL org.opencontainers.image.vendor="Reliza"
 LABEL org.opencontainers.image.title="Sealed Secrets Controller"
-LABEL sealed_secrets_controller_version="0.31.0"
+LABEL sealed_secrets_controller_version="0.32.2"
 
 
 USER 1001
