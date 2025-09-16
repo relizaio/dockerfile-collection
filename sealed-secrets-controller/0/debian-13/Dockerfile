@@ -39,12 +39,11 @@ ARG TARGETARCH
 
 ENV OS_ARCH="${TARGETARCH:-amd64}"
 
-LABEL org.opencontainers.image.base.name="scratch" \
-      org.opencontainers.image.created="2025-09-04T03:42:06Z" \
-      org.opencontainers.image.description="Application packaged by Broadcom, Inc." \
-      org.opencontainers.image.title="sealed-secrets-controller" \
-      org.opencontainers.image.vendor="Broadcom, Inc." \
-      org.opencontainers.image.version="0.31.0"
+
+ARG CI_ENV=noci
+ARG GIT_COMMIT=git_commit_undefined
+ARG GIT_BRANCH=git_branch_undefined
+ARG VERSION=not_versioned
 
 COPY rootfs /
 COPY --from=builder /opt/bitnami/sealed-secrets/.spdx-sealed-secrets.spdx /opt/bitnami/sealed-secrets/.spdx-sealed-secrets.spdx
@@ -55,6 +54,16 @@ ENV APP_VERSION="0.31.0" \
     BITNAMI_APP_NAME="sealed-secrets-controller" \
     IMAGE_REVISION="1" \
     PATH="/opt/bitnami/sealed-secrets/bin:$PATH"
+
+LABEL org.opencontainers.image.base.name="scratch"
+LABEL org.opencontainers.image.revision=$GIT_COMMIT
+LABEL git_branch=$GIT_BRANCH
+LABEL ci_environment=$CI_ENV
+LABEL org.opencontainers.image.version=$VERSION
+LABEL org.opencontainers.image.vendor="Reliza"
+LABEL org.opencontainers.image.title="Sealed Secrets Controller"
+LABEL sealed_secrets_controller_version="0.31.0"
+
 
 USER 1001
 
