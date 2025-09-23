@@ -3,17 +3,15 @@
 
 class AgeFilterPlugin {
   private quarantineDays: number;
-  private logger: { info: (...args: any[]) => void; error: (...args: any[]) => void };
 
   constructor(config: any, options: any) {
+    console.log('PSDEBUG: constructed plugin')
     this.quarantineDays = (config && Number(config.quarantineDays)) || 7;
-    // Prefer Verdaccio logger if provided, otherwise fallback to console
-    this.logger = (options && options.logger) ? options.logger : console;
-    this.logger.info(`[age-filter] init, quarantineDays=${this.quarantineDays}`);
   }
 
   // Called when fetching package metadata
   filter_metadata(metadata: any) {
+    console.log(`PSDEBUG: filtering metadata`);
     try {
       if (!metadata || !metadata.versions || typeof metadata.versions !== 'object') {
         return metadata;
@@ -36,7 +34,7 @@ class AgeFilterPlugin {
       const remaining = Object.keys(metadata.versions);
       if (remaining.length !== originalVersions.length) {
         const removed = originalVersions.length - remaining.length;
-        this.logger.info(`[age-filter] filtered ${removed} version(s) from ${metadata.name || 'unknown'}`);
+        console.log(`[age-filter] filtered ${removed} version(s) from ${metadata.name || 'unknown'}`);
 
         // Reconcile dist-tags to point to an existing version
         if (metadata['dist-tags']) {
@@ -61,7 +59,7 @@ class AgeFilterPlugin {
 
       return metadata;
     } catch (e) {
-      this.logger.error('[age-filter] error in filter_metadata:', e);
+      console.error('[age-filter] error in filter_metadata:', e);
       return metadata;
     }
   }
@@ -89,7 +87,7 @@ module.exports = function createAgeFilterMiddleware(config: any, stuff: any) {
               body = plugin.filter_metadata(body);
             }
           } catch (e) {
-            plugin['logger'].error('[age-filter] middleware wrap error:', e);
+            console.error('[age-filter] middleware wrap error:', e);
           }
           return originalJson(body);
         };
