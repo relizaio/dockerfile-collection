@@ -9,11 +9,7 @@ const NPMJS_URL = 'https://registry.npmjs.org';
 
 // Test packages - choose packages that likely have recent versions
 const TEST_PACKAGES = [
-    'react',
-    'lodash', 
-    'express',
-    'axios',
-    'moment'
+    'axios'
 ];
 
 async function fetchPackageMetadata(url, packageName) {
@@ -43,7 +39,7 @@ function analyzeVersions(metadata, source) {
         return { total: 0, recent: 0, old: 0 };
     }
     
-    const sevenDays = 7 * 24 * 60 * 60 * 1000;
+    const sevenDays = 10 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     
     let total = 0;
@@ -52,9 +48,11 @@ function analyzeVersions(metadata, source) {
     
     for (const [version, data] of Object.entries(metadata.versions)) {
         total++;
-        const created = new Date(data.time?.created || now);
-        const age = now - created.getTime();
+        const publishedStr = metadata.time?.[version];
+        const publishedAt = publishedStr ? Date.parse(publishedStr) : NaN;
+        const age = Number.isFinite(publishedAt) ? (now - publishedAt) : 0;
         
+        // console.log(`Version ${version} is ${age}ms old`);
         if (age < sevenDays) {
             recent++;
         } else {
