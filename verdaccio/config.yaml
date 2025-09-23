@@ -26,7 +26,7 @@ packages:
 middlewares:
   age-filter:
     enabled: true
-    quarantineDays: 7
+    quarantineDays: 10
 
 server:
   keepAliveTimeout: 60

@@ -39,7 +39,7 @@ function analyzeVersions(metadata, source) {
         return { total: 0, recent: 0, old: 0 };
     }
     
-    const sevenDays = 10 * 24 * 60 * 60 * 1000;
+    const quarantineDays = 10 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     
     let total = 0;
@@ -53,7 +53,7 @@ function analyzeVersions(metadata, source) {
         const age = Number.isFinite(publishedAt) ? (now - publishedAt) : 0;
         
         // console.log(`Version ${version} is ${age}ms old`);
-        if (age < sevenDays) {
+        if (age < quarantineDays) {
             recent++;
         } else {
             old++;
