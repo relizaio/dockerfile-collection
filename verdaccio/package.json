@@ -1,5 +1,5 @@
 {
-  "name": "reliza-verdaccio-age-filter-plugin",
+  "name": "verdaccio-age-filter",
   "version": "1.0.0",
   "description": "Verdaccio plugin to filter packages older than 7 days",
   "main": "age-filter-plugin.js",
