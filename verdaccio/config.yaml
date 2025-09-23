@@ -1,0 +1,38 @@
+storage: /verdaccio/storage/data
+plugins: /verdaccio/plugins
+
+web:
+  title: Verdaccio with Age Filter
+  enable: true
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    timeout: 30s
+    maxage: 2m
+    fail_timeout: 5m
+    max_fails: 2
+
+packages:
+  "**":
+    access: $all       # allow downloads
+    publish: none      # disable publishing
+    proxy: npmjs       # mirror everything from upstream
+
+middlewares:
+  age-filter:
+    enabled: true
+
+# Plugin configuration
+age-filter:
+  enabled: true
+  path: /verdaccio/plugins/age-filter/age-filter-plugin.js
+
+server:
+  keepAliveTimeout: 60
+
+logs: { type: stdout, format: pretty, level: http }

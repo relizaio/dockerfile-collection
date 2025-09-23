@@ -1,0 +1,25 @@
+{
+  "name": "reliza-verdaccio-age-filter-plugin",
+  "version": "1.0.0",
+  "description": "Verdaccio plugin to filter packages older than 7 days",
+  "main": "age-filter-plugin.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "verdaccio",
+    "plugin",
+    "filter",
+    "age"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@verdaccio/types": "^10.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^22.0.0"
+  }
+}
