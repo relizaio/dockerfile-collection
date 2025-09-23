@@ -16,7 +16,9 @@
     "age"
   ],
   "verdaccio": {
-    "middlewares": ["age-filter"]
+    "filters": {
+      "age-filter": "./age-filter-plugin.js"
+    }
   },
   "author": "",
   "license": "MIT",

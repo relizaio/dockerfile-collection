@@ -8,6 +8,9 @@ web:
 auth:
   htpasswd:
     file: /verdaccio/storage/htpasswd
+    max_users: -1
+    algorithm: bcrypt
+    rounds: 10
 
 uplinks:
   npmjs:
@@ -23,7 +26,7 @@ packages:
     publish: none      # disable publishing
     proxy: npmjs       # mirror everything from upstream
 
-middlewares:
+filters:
   age-filter:
     enabled: true
     quarantineDays: 10
