@@ -2,17 +2,22 @@
   "name": "verdaccio-age-filter",
   "version": "1.0.0",
   "description": "Verdaccio plugin to filter packages older than 7 days",
-  "main": "age-filter-plugin.js",
+  "main": "./age-filter-plugin.js",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch"
   },
   "keywords": [
     "verdaccio",
+    "verdaccio-plugin",
+    "verdaccio-filter",
     "plugin",
     "filter",
     "age"
   ],
+  "verdaccio": {
+    "middlewares": ["age-filter"]
+  },
   "author": "",
   "license": "MIT",
   "dependencies": {

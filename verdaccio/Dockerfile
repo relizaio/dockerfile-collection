@@ -14,7 +14,8 @@ COPY tsconfig.json /verdaccio/plugins/verdaccio-age-filter/
 
 # Copy Verdaccio configuration
 COPY config.yaml /verdaccio/conf/config.yaml
-RUN chown verdaccio:nogroup -R /verdaccio
+# RUN npm install -g /verdaccio/plugins/verdaccio-age-filter/
+RUN chown verdaccio -R /verdaccio
 
 # Switch back to verdaccio user BEFORE npm operations
 USER verdaccio
@@ -23,6 +24,9 @@ USER verdaccio
 WORKDIR /verdaccio/plugins/verdaccio-age-filter
 RUN npm ci --include=dev
 RUN npx tsc -p /verdaccio/plugins/verdaccio-age-filter/tsconfig.json
+USER root
+RUN npm link
+USER verdaccio
 
 # Expose port
 EXPOSE 4873
