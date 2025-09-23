@@ -77,3 +77,18 @@ Age Filter: Filtered 3 versions from package-name
 - The registry is configured as read-only (no publishing allowed)
 - All package requests are proxied through npmjs.org
 - Storage is persistent through Docker volumes
+
+## Test Steps
+
+```bash
+# Stop current setup
+docker-compose down -v
+
+# Start new setup
+docker-compose up -d --build
+
+# Wait for both services to start
+sleep 10
+
+# Test the age filter
+node test-age-filter.js
