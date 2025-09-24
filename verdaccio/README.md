@@ -11,28 +11,27 @@ This project creates a custom Verdaccio Docker image that includes an age filter
 
 ## Files
 
-- `Dockerfile` - Builds the custom Verdaccio image
+- `Dockerfile` - Builds the custom Verdaccio image (used by docker-compose)
+- `docker-compose.yml` - Compose file to build and run the service
 - `config.yaml` - Verdaccio configuration with proxy and plugin settings
 - `age-filter-plugin.ts` - TypeScript plugin source code
-- `package.json` - Plugin dependencies
+- `package.json` - Plugin and build dependencies
 - `tsconfig.json` - TypeScript compilation configuration
+- `test-age-filter.js` - Script to validate the filter behavior against npmjs.org
 
 ## Usage
 
-### Build the Docker Image
+### Start with docker-compose
 
 ```bash
-docker build -t verdaccio-age-filter .
-```
+# Build and start (rebuilds the image on changes)
+docker-compose up -d --build
 
-### Run the Container
+# View logs
+docker-compose logs -f
 
-```bash
-docker run -d \
-  --name verdaccio-age-filter \
-  -p 4873:4873 \
-  -v verdaccio-storage:/verdaccio/storage \
-  verdaccio-age-filter
+# Stop and remove containers and volumes
+docker-compose down -v
 ```
 
 ### Access Verdaccio
@@ -58,18 +57,38 @@ This ensures that your registry only serves stable, tested packages while still 
 
 ## Configuration
 
-You can modify the age threshold by editing the `sevenDays` constant in `age-filter-plugin.ts`:
+Quarantine period (in days) can be configured via either environment variable or `config.yaml`.
 
-```typescript
-const sevenDays = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
+Precedence (highest to lowest):
+
+1. Environment variable: `VERDACCIO_AGE_FILTER_QUARANTINE_DAYS`
+2. `config.yaml` under `filters.age-filter.quarantineDays`
+3. Default: `7`
+
+In this repo, `docker-compose.yml` sets:
+
+```yaml
+environment:
+  - VERDACCIO_AGE_FILTER_QUARANTINE_DAYS=10
 ```
+
+And `config.yaml` includes:
+
+```yaml
+filters:
+  age-filter:
+    enabled: true
+    quarantineDays: 7
+```
+
+The plugin code in `age-filter-plugin.ts` reads the environment variable first, then the config value, and falls back to `7`.
 
 ## Logs
 
 The plugin logs filtering activity to help you monitor its operation:
 
 ```
-Age Filter: Filtered 3 versions from package-name
+[age-filter] filtered 3 version(s) from package-name
 ```
 
 ## Security Notes
