@@ -29,7 +29,7 @@ packages:
 filters:
   age-filter:
     enabled: true
-    quarantineDays: 10
+    quarantineDays: 7
 
 server:
   keepAliveTimeout: 60

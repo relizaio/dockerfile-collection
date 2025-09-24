@@ -11,6 +11,7 @@ services:
     environment:
       - VERDACCIO_USER_NAME=verdaccio
       - VERDACCIO_USER_UID=10001
+      - VERDACCIO_AGE_FILTER_QUARANTINE_DAYS=10
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4873/-/ping"]

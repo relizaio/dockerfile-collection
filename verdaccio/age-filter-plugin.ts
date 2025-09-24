@@ -5,8 +5,10 @@ class AgeFilterPlugin {
   private quarantineDays: number;
 
   constructor(config: any, options: any) {
-    console.log('PSDEBUG: constructed plugin')
-    this.quarantineDays = (config && Number(config.quarantineDays)) || 7;
+    // Check environment variable first, then config, then default to 7
+    const envValue = process.env.VERDACCIO_AGE_FILTER_QUARANTINE_DAYS;
+    this.quarantineDays = (envValue && Number(envValue)) || (config && Number(config.quarantineDays)) || 7;
+    console.log('PSDEBUG: constructed plugin with quarantineDays', this.quarantineDays);
   }
 
   // Called when fetching package metadata
