@@ -49,7 +49,7 @@ npm config set registry http://localhost:4873
 The age filter plugin intercepts package metadata requests and:
 
 1. Checks the creation time of each package version
-2. Removes versions that are less than 7 days old
+2. Removes versions that are less than 7 (configurable) days old
 3. Logs the filtering activity for monitoring
 4. Returns the filtered metadata to the client
 
