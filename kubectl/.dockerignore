@@ -1,0 +1,21 @@
+# Test files
+test-*.sh
+
+# Documentation
+*.md
+README*
+
+# Version control
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.bak
