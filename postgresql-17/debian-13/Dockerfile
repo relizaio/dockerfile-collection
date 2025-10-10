@@ -26,14 +26,16 @@ RUN install_packages ca-certificates=20250419 curl=8.14.1-2 libbsd0 libbz2-1.0 l
     # Add PostgreSQL repository and install PostgreSQL
     apt-get update && apt-get install -y wget gnupg2 && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
-    echo 'deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt/ trixie-pgdg main' > /etc/apt/sources.list.d/pgdg.list && \
-    apt-get update && \
+    echo 'deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt/ trixie-pgdg main' > /etc/apt/sources.list.d/pgdg.list
+RUN apt-get update && \
+    echo "=== Available PostgreSQL 17 versions ===" && \
+    apt-cache madison postgresql-17 | head -10 && \
     apt-get install -y \
-        postgresql-17=17.6-1.pgdg13+1 \
-        postgresql-client-17=17.6-1.pgdg13+1 && \
-    apt-mark hold postgresql-17 postgresql-client-17 && \
+        postgresql-17=17.6-2.pgdg13+1 \
+        postgresql-client-17=17.6-2.pgdg13+1 && \
+    apt-mark hold postgresql-17 postgresql-client-17
     # Setup PostgreSQL directories and permissions
-    mkdir -p /opt/relizaio/postgresql/{bin,share,conf,conf.default,logs,tmp} && \
+RUN mkdir -p /opt/relizaio/postgresql/{bin,share,conf,conf.default,logs,tmp} && \
     ln -sf /usr/lib/postgresql/17/bin/* /opt/relizaio/postgresql/bin/ && \
     cp /usr/share/postgresql/17/postgresql.conf.sample /opt/relizaio/postgresql/share/postgresql.conf.sample && \
     cp /usr/share/postgresql/17/postgresql.conf.sample /opt/relizaio/postgresql/conf/postgresql.conf && \
@@ -73,20 +75,16 @@ EXPOSE 5432
 USER 1001
 
 LABEL org.opencontainers.image.base.name="docker.io/library/debian:13.1-slim" \
-      org.opencontainers.image.created="2025-09-07T02:20:20Z" \
-      org.opencontainers.image.description="Application packaged by Reliza Incorporated" \
+      org.opencontainers.image.description="PostgreSQL 17 packaged by Reliza Incorporated" \
       org.opencontainers.image.documentation="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17/README.md" \
-      org.opencontainers.image.source="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17" \
-      org.opencontainers.image.title="postgresql" \
-      org.opencontainers.image.vendor="Reliza Incorporated" \
-      org.opencontainers.image.version="17.6.0"
-LABEL org.opencontainers.image.revision $GIT_COMMIT
-LABEL git_branch $GIT_BRANCH
-LABEL ci_environment $CI_ENV
-LABEL org.opencontainers.image.version $VERSION
-LABEL org.opencontainers.image.vendor Reliza
-LABEL org.opencontainers.image.title "ReARM PostgreSQL"
-LABEL PG_VERSION "17.6-1.pgdg13+1"
+      org.opencontainers.image.source="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17"
+LABEL org.opencontainers.image.revision=$GIT_COMMIT
+LABEL git_branch=$GIT_BRANCH
+LABEL ci_environment=$CI_ENV
+LABEL org.opencontainers.image.version=$VERSION
+LABEL org.opencontainers.image.vendor="Reliza Incorporated"
+LABEL org.opencontainers.image.title="ReARM PostgreSQL"
+LABEL PG_VERSION="17.6-2.pgdg13+1"
 
 
 ENTRYPOINT [ "/opt/relizaio/scripts/postgresql/entrypoint.sh" ]
