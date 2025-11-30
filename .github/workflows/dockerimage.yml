@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for PostgreSQL AWS CLI
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@3.11
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
@@ -100,8 +100,8 @@ jobs:
         image_name: psql-awscli
         reliza_api_id: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_ID }}
         reliza_api_key: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }}
-        path: bitnami-postgresql-aws
-        platform_architectures: 'linux/amd64,linux/arm64'
+        path: postgresql-awscli
+        platform_architectures: 'linux/amd64'
   build-postgres-postgis:
     runs-on: ubuntu-latest
     steps:

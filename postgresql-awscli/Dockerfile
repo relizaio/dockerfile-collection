@@ -1,4 +1,4 @@
-FROM python:3.11-alpine3.19 as builder
+FROM python:3.14.0-alpine3.22@sha256:8373231e1e906ddfb457748bfc032c4c06ada8c759b7b62d9c73ec2a3c56e710 as builder
 
 ARG AWS_CLI_VERSION=2.15.30
 RUN apk add --no-cache git unzip groff build-base libffi-dev cmake
@@ -20,7 +20,7 @@ RUN (cd /usr/local/lib/aws-cli; for a in *.so*; do test -f /lib/$a && rm $a; don
 RUN aws --version
 
 # build the final image
-FROM alpine:3.19.1
+FROM alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412
 COPY --from=builder /usr/local/lib/aws-cli/ /usr/local/lib/aws-cli/
 RUN ln -s /usr/local/lib/aws-cli/aws /usr/local/bin/aws
 
@@ -28,7 +28,7 @@ ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
-ENV AWSCLI_VERSION "2.15.30"
+ENV AWSCLI_VERSION "2.32.6"
 
 USER root
 
