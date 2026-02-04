@@ -9,11 +9,6 @@ RUN ./configure --with-install-type=portable-exe --with-download-deps
 RUN make
 RUN make install
 
-# reduce image size: remove autocomplete and examples
-RUN rm -rf \
-    /usr/local/lib/aws-cli/aws_completer \
-    /usr/local/lib/aws-cli/awscli/data/ac.index \
-    /usr/local/lib/aws-cli/awscli/examples
 RUN find /usr/local/lib/aws-cli/awscli/data -name completions-1*.json -delete
 RUN find /usr/local/lib/aws-cli/awscli/botocore/data -name examples-1.json -delete
 RUN (cd /usr/local/lib/aws-cli; for a in *.so*; do test -f /lib/$a && rm $a; done) || true
@@ -21,7 +16,9 @@ RUN aws --version
 
 FROM alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 AS oras-builder
 ENV ORAS_VERSION="1.3.0"
-RUN curl -LO "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
+COPY tools.sha256.sum .
+RUN apk add curl && \
+    curl -LO "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
     && sha256sum -c tools.sha256.sum \
     && mkdir -p oras-install/ \
     && tar -zxf oras_${ORAS_VERSION}_*.tar.gz -C oras-install/
@@ -44,7 +41,7 @@ USER root
 RUN adduser -u 1000 -D apprunner \
     && apk add openssl \
     && aws --version \
-    && oras --version
+    && oras version
 
 COPY --chown=apprunner:apprunner ./entrypoint.sh /entrypoint.sh
 RUN chmod 0770 ./entrypoint.sh
