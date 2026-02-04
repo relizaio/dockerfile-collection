@@ -46,10 +46,14 @@ RUN adduser -u 1000 -D apprunner \
 COPY --chown=apprunner:apprunner ./entrypoint.sh /entrypoint.sh
 RUN chmod 0770 ./entrypoint.sh
 
-LABEL git_commit=$GIT_COMMIT
+LABEL org.opencontainers.image.vendor="Reliza Incorporated"
+LABEL org.opencontainers.image.title="ORAS AWS CLI"
+LABEL org.opencontainers.image.source="https://github.com/relizaio/dockerfile-collection"
+LABEL org.opencontainers.image.license="MIT"
+LABEL org.opencontainers.image.revision=$GIT_COMMIT
 LABEL git_branch=$GIT_BRANCH
 LABEL ci_environment=$CI_ENV
-LABEL version=$VERSION
+LABEL org.opencontainers.image.version=$VERSION
 
 USER apprunner
 
