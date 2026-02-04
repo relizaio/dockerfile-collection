@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for Maven Postgresql CI
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for JQ
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for AWS CLI v1
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for kubectl Reliza Watcher image
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for Reliza Helm Push image
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
@@ -78,7 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for Helm and Reliza CLI image
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
@@ -92,21 +92,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for PostgreSQL AWS CLI
-      uses: relizaio/reliza-docker-action@3.11
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
-        registry_username: ${{ secrets.docker_login }}
-        registry_password: ${{ secrets.docker_token }}
-        image_namespace: relizaio
+        registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
+        registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
+        registry_host: registry.relizahub.com
+        image_namespace: registry.relizahub.com/library
         image_name: psql-awscli
         reliza_api_id: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_ID }}
         reliza_api_key: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }}
         path: postgresql-awscli
         platform_architectures: 'linux/amd64'
+  build-oras-awscli:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Build and submit release for ORAS AWS CLI
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
+      with:
+        registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
+        registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
+        registry_host: registry.relizahub.com
+        image_namespace: registry.relizahub.com/library
+        image_name: oras-awscli
+        reliza_api_id: ${{ secrets.RELIZA_ORAS_AWSCLI_API_ID }}
+        reliza_api_key: ${{ secrets.RELIZA_ORAS_AWSCLI_API_KEY }}
+        path: oras-awscli
+        platform_architectures: 'linux/amd64'
   build-postgres-postgis:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for PostgreSQL Postgis
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
@@ -120,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for azcopy
-      uses: relizaio/reliza-docker-action@2.0
+      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
       with:
         registry_username: ${{ secrets.docker_login }}
         registry_password: ${{ secrets.docker_token }}
