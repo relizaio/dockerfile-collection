@@ -4,7 +4,7 @@ set -o nounset
 set -o pipefail
 TIMESTAMP=$(date +"%Y-%m-%d-%H-%M")
 
-oras login -u "$REGISTRY_USERNAME" -p "$REGISTRY_TOKEN" "REGISTRY_HOST"
+oras login -u "$REGISTRY_USERNAME" -p "$REGISTRY_TOKEN" "$REGISTRY_HOST"
 oras backup --output /tmp/dump.tar "$REGISTRY_HOST/$REGISTRY_PATH"
 /bin/gzip /tmp/dump.tar
 
