@@ -25,7 +25,7 @@ RUN apk add --no-cache ca-certificates && \
     chown apprunner:apprunner -R /app
 COPY --from=build-stage --chown=apprunner:apprunner /build/kubectl /app/kubectl
 COPY --chown=apprunner:apprunner entrypoint.sh /app/entrypoint.sh
-RUN chmod 0500 /app/kubectl && chmod 0555 /app/entrypoint.sh && \
+RUN chmod 0555 /app/kubectl && chmod 0555 /app/entrypoint.sh && \
     /app/kubectl version --client
 
 # Add kubectl to PATH so it can be called directly from shell commands
