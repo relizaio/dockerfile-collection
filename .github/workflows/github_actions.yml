@@ -25,7 +25,6 @@ jobs:
           reliza_api_id: ${{ secrets.RELIZA_REARM_POSTGRES_API_ID }}
           reliza_api_key: ${{ secrets.RELIZA_REARM_POSTGRES_API_KEY }}
           path: postgresql-17/debian-13
-          enable_sbom: 'true'
           push_to_rearm: 'true'
           rearm_api_id: ${{ secrets.REARM_REARM_POSTGRES_API_ID }}
           rearm_api_key: ${{ secrets.REARM_REARM_POSTGRES_API_KEY }}
@@ -48,7 +47,6 @@ jobs:
           reliza_api_id: ${{ secrets.RELIZA_SECRETS_CONTROLLER_API_ID }}
           reliza_api_key: ${{ secrets.RELIZA_SECRETS_CONTROLLER_API_KEY }}
           path: sealed-secrets-controller/0/debian-13
-          enable_sbom: 'true'
           push_to_rearm: 'true'
           rearm_api_id: ${{ secrets.REARM_SECRETS_CONTROLLER_API_ID }}
           rearm_api_key: ${{ secrets.REARM_SECRETS_CONTROLLER_API_KEY }}
@@ -71,7 +69,6 @@ jobs:
           reliza_api_id: ${{ secrets.RELIZA_VERDACCIO_API_ID }}
           reliza_api_key: ${{ secrets.RELIZA_VERDACCIO_API_KEY }}
           path: verdaccio
-          enable_sbom: 'true'
           push_to_rearm: 'true'
           rearm_api_id: ${{ secrets.REARM_RELIZA_VERDACCIO_API_ID }}
           rearm_api_key: ${{ secrets.REARM_RELIZA_VERDACCIO_API_KEY }}
@@ -94,7 +91,6 @@ jobs:
           reliza_api_id: ${{ secrets.RELIZA_KUBECTL_API_ID }}
           reliza_api_key: ${{ secrets.RELIZA_KUBECTL_API_KEY }}
           path: kubectl
-          enable_sbom: 'true'
           push_to_rearm: 'true'
           rearm_api_id: ${{ secrets.REARM_RELIZA_KUBECTL_API_ID }}
           rearm_api_key: ${{ secrets.REARM_RELIZA_KUBECTL_API_KEY }}
@@ -185,35 +181,49 @@ jobs:
         path: helm-reliza
         platform_architectures: 'linux/amd64,linux/arm64'
   build-psql-awscli:
+    permissions:
+      id-token: write
     runs-on: ubuntu-latest
     steps:
-    - name: Build and submit release for PostgreSQL AWS CLI
-      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
-      with:
-        registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
-        registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
-        registry_host: registry.relizahub.com
-        image_namespace: registry.relizahub.com/library
-        image_name: psql-awscli
-        reliza_api_id: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_ID }}
-        reliza_api_key: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }}
-        path: postgresql-awscli
-        platform_architectures: 'linux/amd64'
+      - name: Build and submit release for PostgreSQL AWS CLI
+        uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
+        with:
+          registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
+          registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
+          registry_host: registry.relizahub.com
+          image_namespace: registry.relizahub.com/library
+          image_name: psql-awscli
+          reliza_api_id: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_ID }}
+          reliza_api_key: ${{ secrets.RELIZA_POSTGRESQL_AWSCLI_API_KEY }}
+          path: postgresql-awscli
+          platform_architectures: 'linux/amd64'
+          push_to_rearm: 'true'
+          rearm_api_id: ${{ secrets.REARM_POSTGRESQL_AWSCLI_API_ID }}
+          rearm_api_key: ${{ secrets.REARM_POSTGRESQL_AWSCLI_API_KEY }}
+          source_code_sbom_type: 'none'
+          rearm_enable_public_cosign_sigstore: 'true'
   build-oras-awscli:
+    permissions:
+      id-token: write
     runs-on: ubuntu-latest
     steps:
-    - name: Build and submit release for ORAS AWS CLI
-      uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
-      with:
-        registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
-        registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
-        registry_host: registry.relizahub.com
-        image_namespace: registry.relizahub.com/library
-        image_name: oras-awscli
-        reliza_api_id: ${{ secrets.RELIZA_ORAS_AWSCLI_API_ID }}
-        reliza_api_key: ${{ secrets.RELIZA_ORAS_AWSCLI_API_KEY }}
-        path: oras-awscli
-        platform_architectures: 'linux/amd64'
+      - name: Build and submit release for ORAS AWS CLI
+        uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
+        with:
+          registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
+          registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
+          registry_host: registry.relizahub.com
+          image_namespace: registry.relizahub.com/library
+          image_name: oras-awscli
+          reliza_api_id: ${{ secrets.RELIZA_ORAS_AWSCLI_API_ID }}
+          reliza_api_key: ${{ secrets.RELIZA_ORAS_AWSCLI_API_KEY }}
+          path: oras-awscli
+          platform_architectures: 'linux/amd64'
+          push_to_rearm: 'true'
+          rearm_api_id: ${{ secrets.REARM_ORAS_AWSCLI_API_ID }}
+          rearm_api_key: ${{ secrets.REARM_ORAS_AWSCLI_API_KEY }}
+          source_code_sbom_type: 'none'
+          rearm_enable_public_cosign_sigstore: 'true'
   build-postgres-postgis:
     runs-on: ubuntu-latest
     steps:
