@@ -4,11 +4,10 @@ COPY . .
 ARG TARGETOS
 ARG TARGETARCH
 
-ADD https://dl.k8s.io/v1.32.9/kubernetes-client-linux-${TARGETARCH}.tar.gz ./kubernetes-client-${TARGETARCH}.tar.gz
+ADD https://dl.k8s.io/v1.33.7/kubernetes-client-linux-${TARGETARCH}.tar.gz ./kubernetes-client-linux-${TARGETARCH}.tar.gz
 RUN sha512sum -c tools.${TARGETARCH}.sha512
-RUN tar -xzf kubernetes-client-${TARGETARCH}.tar.gz && \
-    mv kubernetes/client/bin/kubectl kubectl && \
-    rm -rf kubernetes kubernetes-client-${TARGETARCH}.tar.gz
+RUN tar -xzf kubernetes-client-linux-${TARGETARCH}.tar.gz && \
+    mv kubernetes/client/bin/kubectl kubectl
 
 FROM alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 AS release-stage
 ARG TARGETARCH
@@ -16,7 +15,7 @@ ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
-ENV KUBECTL_VERSION=1.32.9
+ENV KUBECTL_VERSION=1.33.7
 
 USER root
 RUN apk add --no-cache ca-certificates && \
