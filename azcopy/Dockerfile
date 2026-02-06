@@ -1,7 +1,7 @@
-From alpine:3.15.4@sha256:a777c9c66ba177ccfea23f2a216ff6721e78a662cd17019488c417135299cd89
+FROM alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
 ARG TARGETOS
 ARG TARGETARCH 
-ARG AZVERSION=azcopy_${TARGETOS}_${TARGETARCH}_10.15.0
+ARG AZVERSION=10.32.0
 ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
@@ -11,9 +11,9 @@ RUN apk --update add --virtual build-dependencies --no-cache wget tar
 RUN apk --update add libc6-compat ca-certificates
 RUN apk add --no-cache postgresql-client
 
-RUN wget -O azcopy.tar.gz https://azcopyvnext.azureedge.net/release20220511/${AZVERSION}.tar.gz && \
-    tar -xf azcopy.tar.gz && \
-    mv ${AZVERSION}/azcopy /usr/local/bin && \
+RUN wget -O azcopy.tar.gz https://github.com/Azure/azure-storage-azcopy/releases/download/v${AZVERSION}/azcopy_${TARGETOS}_${TARGETARCH}_${AZVERSION}.tar.gz && \
+    tar -xf azcopy.tar.gz && ls && \
+    mv azcopy_${TARGETOS}_${TARGETARCH}_${AZVERSION}/azcopy /usr/local/bin && \
     rm -rf azcopy* && \
     apk del build-dependencies
 
