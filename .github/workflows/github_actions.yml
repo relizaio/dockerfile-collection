@@ -80,10 +80,10 @@ jobs:
   build-reliza-kubectl:
     permissions:
       id-token: write
-    name: Build And Push Reliza Verdaccio
+    name: Build And Push Reliza Kubectl
     runs-on: ubuntu-latest
     steps:
-      - name: RelizaHub Build And Submit Reliza Verdaccio Release
+      - name: RelizaHub Build And Submit Reliza Kubectl Release
         uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
         with:
           registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
