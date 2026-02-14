@@ -136,12 +136,13 @@ spec:
 ## Workflow
 
 1. **Extract images** - Scans pods in specified namespace using `kubectl get po -o yaml`
-2. **Filter and deduplicate** - Removes bare SHA256 digests, keeps full image references
-3. **Backup with Skopeo** - Copies each image to `docker-archive` tar bundle
-4. **Compress** - Gzips the tar archive
-5. **Create manifest** - Generates timestamped list of backed-up images
-6. **Encrypt** - Optionally encrypts both backup and manifest with AES-256-CBC
-7. **Upload to S3** - Uploads both files with timestamped names
+2. **Filter and deduplicate** - Removes bare SHA256 digests and empty entries, keeps full image references
+3. **Backup with Skopeo** - Copies each image to an individual `docker-archive` tar (digests and tags are stripped, all images tagged as `:backup`)
+4. **Bundle** - Combines all individual image archives into a single tar
+5. **Compress** - Gzips the tar archive
+6. **Create manifest** - Generates timestamped list of backed-up images
+7. **Encrypt** - Optionally encrypts both backup and manifest with AES-256-CBC
+8. **Upload to S3** - Uploads both files with timestamped names
 
 ## S3 Artifacts
 
@@ -169,15 +170,25 @@ openssl enc -aes-256-cbc -d -a -pbkdf2 -iter 600000 \
 gunzip backup.tar.gz
 ```
 
-### 2. Load images
+### 2. Extract and load images
+
+The backup archive contains individual `docker-archive` tar files per image.
 
 ```bash
-# Docker
-docker load < backup.tar
+# Extract the bundle
+mkdir restore && tar xf backup.tar -C restore
 
-# containerd (for Kubernetes)
-ctr -n k8s.io image import backup.tar
+# Load each image
+for f in restore/*.tar; do
+    echo "Loading $f"
+    # Docker
+    docker load < "$f"
+    # Or containerd (for Kubernetes)
+    # ctr -n k8s.io image import "$f"
+done
 ```
+
+All images will be loaded with the `:backup` tag (e.g., `registry.io/app:backup`).
 
 ### 3. View image list
 
@@ -193,7 +204,7 @@ cat images.txt
 
 ## Notes
 
-- **Digest-based images**: If your images use digests (e.g., `registry.io/app@sha256:abc...`), you'll need to reference them by digest in Kubernetes manifests after restore, or manually tag them
+- **Image tagging**: All backed-up images are stored with a uniform `:backup` tag regardless of original tag or digest. After restore, retag as needed (e.g., `docker tag registry.io/app:backup registry.io/app:v1.2.3`)
 - **Auth file**: Must be in Docker config.json format with registry credentials
 - **Storage**: Backup size depends on number and size of container images in the namespace
 - **Network**: Requires outbound access to container registries and S3

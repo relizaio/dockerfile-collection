@@ -20,8 +20,11 @@ fi
 echo "Step 2: Found $(wc -l < /tmp/images.txt) unique images to backup"
 cat /tmp/images.txt
 
-echo "Step 3: Copying images to tar archive"
-rm -f "$TAR"
+echo "Step 3: Copying images to individual archives"
+BACKUP_DIR="/tmp/image-backups"
+rm -rf "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR"
+COUNT=0
 while IFS= read -r img; do
     # Skip empty lines
     [ -z "$img" ] && continue
@@ -29,19 +32,23 @@ while IFS= read -r img; do
     echo "Backing up: $img"
     # Strip both digest and tag, add uniform :backup tag for docker-archive compatibility
     img_name=$(echo "$img" | sed -e 's/@sha256:.*//' -e 's/:[^:]*$//')
+    COUNT=$((COUNT + 1))
     skopeo copy --src-authfile "$AUTH" \
-        "docker://$img" "docker-archive:$TAR:${img_name}:backup"
+        "docker://$img" "docker-archive:${BACKUP_DIR}/${COUNT}.tar:${img_name}:backup"
 done < /tmp/images.txt
 
-echo "Step 4: Compressing backup"
+echo "Step 4: Bundling into single archive"
+tar -cf "$TAR" -C "$BACKUP_DIR" .
+
+echo "Step 5: Compressing backup"
 gzip -f "$TAR"
 BACKUP_FILE="${TAR}.gz"
 
-echo "Step 5: Creating image list artifact"
+echo "Step 6: Creating image list artifact"
 IMAGE_LIST="/tmp/image-list-${TIMESTAMP}.txt"
 cp /tmp/images.txt "${IMAGE_LIST}"
 
-echo "Step 6: Encrypting and uploading"
+echo "Step 7: Encrypting and uploading"
 if [ -n "${ENCRYPTION_PASSWORD:-}" ]; then
     openssl enc -aes-256-cbc -a -pbkdf2 -iter 600000 -salt -pass pass:"${ENCRYPTION_PASSWORD}" \
         -in "${BACKUP_FILE}" -out "${BACKUP_FILE}.enc"
