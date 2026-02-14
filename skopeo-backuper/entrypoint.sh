@@ -10,7 +10,7 @@ TAR="/tmp/backup-bundle.tar"
 mkdir -p /auth
 
 echo "Step 1: Extracting images from namespace ${K8S_NAMESPACE}"
-kubectl get po -n "${K8S_NAMESPACE}" -o yaml | grep 'imageID:' | awk '{print $2}' | grep -v '^sha256:' | sort -u > /tmp/images.txt
+kubectl get po -n "${K8S_NAMESPACE}" -o yaml | grep 'imageID:' | awk '{print $2}' | grep -v '^sha256:' | grep -v '^$' | sort -u > /tmp/images.txt
 
 if [ ! -s /tmp/images.txt ]; then
     echo "Error: No images found in namespace ${K8S_NAMESPACE}"
