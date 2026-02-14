@@ -24,8 +24,10 @@ echo "Step 3: Copying images to tar archive"
 rm -f "$TAR"
 while IFS= read -r img; do
     echo "Backing up: $img"
+    # Strip both digest and tag, add uniform :backup tag for docker-archive compatibility
+    img_name=$(echo "$img" | sed -e 's/@sha256:.*//' -e 's/:[^:]*$//')
     skopeo copy --src-authfile "$AUTH" \
-        "docker://$img" "docker-archive:$TAR:$img"
+        "docker://$img" "docker-archive:$TAR:${img_name}:backup"
 done < /tmp/images.txt
 
 echo "Step 4: Compressing backup"
@@ -51,8 +53,8 @@ else
 fi
 
 if [ -n "${AWS_BUCKET:-}" ]; then
-    aws s3 cp "${UPLOAD_FILE}" "s3://${AWS_BUCKET}/${BACKUP_PREFIX:-backup}-${TIMESTAMP}.tar.gz.enc"
-    echo "Uploaded to S3: s3://${AWS_BUCKET}/${BACKUP_PREFIX:-backup}-${TIMESTAMP}.tar.gz.enc"
+    aws s3 cp "${UPLOAD_FILE}" "s3://${AWS_BUCKET}/${BACKUP_PREFIX:-backup}-${TIMESTAMP}.tar.gz${ENCRYPTION_PASSWORD:+.enc}"
+    echo "Uploaded to S3: s3://${AWS_BUCKET}/${BACKUP_PREFIX:-backup}-${TIMESTAMP}.tar.gz${ENCRYPTION_PASSWORD:+.enc}"
     
     aws s3 cp "${UPLOAD_LIST}" "s3://${AWS_BUCKET}/${BACKUP_PREFIX:-backup}-${TIMESTAMP}-images.txt${ENCRYPTION_PASSWORD:+.enc}"
     echo "Uploaded image list to S3: s3://${AWS_BUCKET}/${BACKUP_PREFIX:-backup}-${TIMESTAMP}-images.txt${ENCRYPTION_PASSWORD:+.enc}"
