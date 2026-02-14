@@ -224,6 +224,21 @@ jobs:
           rearm_api_key: ${{ secrets.REARM_ORAS_AWSCLI_API_KEY }}
           source_code_sbom_type: 'none'
           rearm_enable_public_cosign_sigstore: 'true'
+  build-skopeo-backuper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and submit release for Skopeo Backuper
+        uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
+        with:
+          registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
+          registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
+          registry_host: registry.relizahub.com
+          image_namespace: registry.relizahub.com/library
+          image_name: skopeo-backuper
+          reliza_api_id: ${{ secrets.RELIZA_SKOPEO_BACKUPER_API_ID }}
+          reliza_api_key: ${{ secrets.RELIZA_SKOPEO_BACKUPER_API_KEY }}
+          path: skopeo-backuper
+          platform_architectures: 'linux/amd64'
   build-postgres-postgis:
     runs-on: ubuntu-latest
     steps:
