@@ -10,7 +10,7 @@ TAR="/tmp/backup-bundle.tar"
 mkdir -p /auth
 
 echo "Step 1: Extracting images from namespace ${K8S_NAMESPACE}"
-kubectl get po -n "${K8S_NAMESPACE}" -o yaml | grep 'imageID:' | awk '{print $2}' | grep -v '^sha256:' | grep -v '^$' | sort -u > /tmp/images.txt
+kubectl get po -n "${K8S_NAMESPACE}" -o yaml | grep 'imageID:' | awk '{print $2}' | grep -v '^sha256:' | grep -v '^$' | sed '/^[[:space:]]*$/d' | sort -u > /tmp/images.txt
 
 if [ ! -s /tmp/images.txt ]; then
     echo "Error: No images found in namespace ${K8S_NAMESPACE}"
@@ -23,6 +23,9 @@ cat /tmp/images.txt
 echo "Step 3: Copying images to tar archive"
 rm -f "$TAR"
 while IFS= read -r img; do
+    # Skip empty lines
+    [ -z "$img" ] && continue
+    
     echo "Backing up: $img"
     # Strip both digest and tag, add uniform :backup tag for docker-archive compatibility
     img_name=$(echo "$img" | sed -e 's/@sha256:.*//' -e 's/:[^:]*$//')
