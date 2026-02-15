@@ -24,8 +24,9 @@ rm -rf "$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 COUNT=0
 while IFS= read -r img; do
-    # Skip empty lines
+    # Skip empty lines and literal empty quotes
     [ -z "$img" ] && continue
+    [ "$img" = '""' ] && continue
     
     echo "Backing up: $img"
     # Strip both digest and tag, add uniform :backup tag for docker-archive compatibility
