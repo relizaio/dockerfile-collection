@@ -7,8 +7,6 @@ TIMESTAMP=$(date +"%Y-%m-%d-%H-%M")
 AUTH="${AUTH_FILE:-/auth/config.json}"
 TAR="/tmp/backup-bundle.tar"
 
-mkdir -p /auth
-
 echo "Step 1: Extracting images from namespace ${K8S_NAMESPACE}"
 kubectl get po -n "${K8S_NAMESPACE}" -o yaml | grep 'imageID:' | awk '{print $2}' | grep -v '^sha256:' | grep -v '^$' | sed '/^[[:space:]]*$/d' | sort -u > /tmp/images.txt
 
@@ -33,7 +31,9 @@ while IFS= read -r img; do
     # Strip both digest and tag, add uniform :backup tag for docker-archive compatibility
     img_name=$(echo "$img" | sed -e 's/@sha256:.*//' -e 's/:[^:]*$//')
     COUNT=$((COUNT + 1))
-    skopeo copy --src-authfile "$AUTH" \
+    AUTH_FLAG=""
+    [ -f "$AUTH" ] && AUTH_FLAG="--src-authfile $AUTH"
+    skopeo copy $AUTH_FLAG \
         "docker://$img" "docker-archive:${BACKUP_DIR}/${COUNT}.tar:${img_name}:backup"
 done < /tmp/images.txt
 
