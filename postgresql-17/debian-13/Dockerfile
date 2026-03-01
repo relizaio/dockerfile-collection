@@ -1,7 +1,7 @@
 # Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
 # SPDX-License-Identifier: MIT
 
-FROM docker.io/library/debian:13.1-slim@sha256:1caf1c703c8f7e15dcf2e7769b35000c764e6f50e4d7401c355fb0248f3ddfdb
+FROM docker.io/library/debian:13.3-slim@sha256:1d3c811171a08a5adaa4a163fbafd96b61b87aa871bbc7aa15431ac275d3d430
 
 ARG EXTRA_LOCALES
 ARG TARGETARCH
@@ -22,7 +22,7 @@ COPY prebuildfs /
 SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
 
 # Combined package installation and PostgreSQL setup to reduce layers
-RUN install_packages ca-certificates=20250419 curl=8.14.1-2 libbsd0 libbz2-1.0 libedit2 libffi8 libgcc-s1=14.2.0-19 libgmp10 libgnutls30 libhogweed6 libicu76=76.1-4 libidn2-0 libldap-common=2.6.10+dfsg-1 liblz4-1 liblzma5 libmd0 libnettle8 libp11-kit0 libpcre2-8-0=10.46-1~deb13u1 libreadline8t64=8.2-6 libsasl2-2 libsqlite3-0 libssl3t64=3.5.1-1 libstdc++6=14.2.0-19 libtasn1-6 libtinfo6 libunistring5=1.3-2 libuuid1 libxml2=2.12.7+dfsg+really2.9.14-2.1+deb13u1 libxslt1.1=1.1.35-1.2+deb13u2 libzstd1=1.5.7+dfsg-1 locales=2.41-12 procps=2:4.0.4-9 zlib1g=1:1.3.dfsg+really1.3.1-1+b1 && \
+RUN apt-get update && install_packages ca-certificates=20250419 curl libbsd0 libbz2-1.0 libedit2 libffi8 libgcc-s1 libgmp10 libgnutls30 libhogweed6 libicu76 libidn2-0 libldap-common liblz4-1 liblzma5 libmd0 libnettle8 libp11-kit0 libpcre2-8-0=10.46-1~deb13u1 libreadline8t64 libsasl2-2 libsqlite3-0 libssl3t64 libstdc++6=14.2.0-19 libtasn1-6 libtinfo6 libunistring5 libuuid1 libxml2 libxslt1.1 libzstd1 locales procps zlib1g && \
     # Add PostgreSQL repository and install PostgreSQL
     apt-get update && apt-get install -y wget gnupg2 && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
@@ -31,8 +31,8 @@ RUN apt-get update && \
     echo "=== Available PostgreSQL 17 versions ===" && \
     apt-cache madison postgresql-17 | head -10 && \
     apt-get install -y \
-        postgresql-17=17.6-2.pgdg13+1 \
-        postgresql-client-17=17.6-2.pgdg13+1 && \
+        postgresql-17=17.8-0+deb13u1 \
+        postgresql-client-17=17.8-0+deb13u1 && \
     apt-mark hold postgresql-17 postgresql-client-17
     # Setup PostgreSQL directories and permissions
 RUN mkdir -p /opt/relizaio/postgresql/{bin,share,conf,conf.default,logs,tmp} && \
@@ -60,7 +60,7 @@ COPY rootfs /
 RUN /opt/relizaio/scripts/postgresql/postunpack.sh && \
     /opt/relizaio/scripts/locales/generate-locales.sh
 
-ENV APP_VERSION="17.6.0" \
+ENV APP_VERSION="17.8.0" \
     RELIZAIO_APP_NAME="postgresql" \
     IMAGE_REVISION="6" \
     LANG="en_US.UTF-8" \
@@ -74,7 +74,7 @@ EXPOSE 5432
 
 USER 1001
 
-LABEL org.opencontainers.image.base.name="docker.io/library/debian:13.1-slim" \
+LABEL org.opencontainers.image.base.name="docker.io/library/debian:13.3-slim" \
       org.opencontainers.image.description="PostgreSQL 17 packaged by Reliza Incorporated" \
       org.opencontainers.image.documentation="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17/README.md" \
       org.opencontainers.image.source="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17"
@@ -84,7 +84,7 @@ LABEL ci_environment=$CI_ENV
 LABEL org.opencontainers.image.version=$VERSION
 LABEL org.opencontainers.image.vendor="Reliza Incorporated"
 LABEL org.opencontainers.image.title="ReARM PostgreSQL"
-LABEL PG_VERSION="17.6-2.pgdg13+1"
+LABEL PG_VERSION="17.8-0+deb13u1"
 
 
 ENTRYPOINT [ "/opt/relizaio/scripts/postgresql/entrypoint.sh" ]
