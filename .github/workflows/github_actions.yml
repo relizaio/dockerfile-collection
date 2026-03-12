@@ -237,7 +237,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Build and submit release for OCI Backups
-        uses: relizaio/rearm-docker-action@bff513d319274655789d68c0af4b9a4dc53bddd4 # v1.8.0
+        uses: relizaio/rearm-docker-action@5038cf24067c7a71400b633819c3eb97b17aa5c1 # v1.8.0
         with:
           registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
           registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
@@ -249,12 +249,13 @@ jobs:
           rearm_api_url: https://reliza.rearmhq.com
           path: oci-backups
           platform_architectures: 'linux/amd64'
-          source_code_sbom_type: 'none'
           enable_public_cosign_sigstore: 'true'
           push_to_rearm_mirror: 'true'
           rearm_mirror_api_id: ${{ secrets.REARM_OCI_BACKUPS_API_ID }}
           rearm_mirror_api_key: ${{ secrets.REARM_OCI_BACKUPS_API_KEY }}
           rearm_mirror_api_url: https://demo.rearmhq.com
+          enable_sbom: true
+          source_code_sbom_type: go
 
   build-skopeo-backuper:
     runs-on: ubuntu-latest
