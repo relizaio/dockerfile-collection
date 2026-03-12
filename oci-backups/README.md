@@ -74,3 +74,44 @@ kubectl create secret generic rearm-backup-azure \
   --from-literal=azure-container="backups" \
   --from-literal=encryption-password="optional"
 ```
+
+## Restoring OCI Artifact Backups
+
+### Prerequisites
+
+The machine performing the restore must have:
+
+* `age` CLI (if encryption was enabled)
+* `oras` CLI (v1.3.0 or higher)
+* Write access to the target container registry
+
+## Step 1: Authenticate
+
+Ensure your local ORAS CLI is logged in to the registry where you want to push the recovered data:
+
+```bash
+oras login -u "$REGISTRY_USERNAME" -p "$REGISTRY_TOKEN" "$REGISTRY_HOST"
+
+```
+
+## Step 2: Decrypt the Backup
+
+Download your `.age` encrypted backup file from S3/Azure. Use the `age` CLI and your `ENCRYPTION_PASSWORD` to decrypt it:
+
+```bash
+age -d -o restored-backup.tar.gz downloaded-backup.tar.gz.age
+
+```
+
+## Step 3: Restore the Data
+
+*Note: `oras` cannot read `.gz` files natively, so it must be unzipped to a raw `.tar` first.*
+
+```bash
+# 1. Strip the gzip compression (leaves a restored-backup.tar file)
+gunzip restored-backup.tar.gz
+
+# 2. Push the raw tarball directly to the registry
+oras restore --input ./restored-backup.tar registry.example.com/namespace/recovered-repo
+
+```
