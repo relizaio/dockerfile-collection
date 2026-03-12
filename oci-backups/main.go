@@ -71,8 +71,10 @@ type BackupStats struct {
 	Total        int64
 	Success      int64
 	FailureCount int64
+	SkippedCount int64
 	TotalBytes   int64
 	Failed       []string
+	Skipped      []string
 }
 
 func (s *BackupStats) RecordJob() {
@@ -85,6 +87,16 @@ func (s *BackupStats) RecordSuccess() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Success++
+}
+
+func (s *BackupStats) RecordSkipped(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SkippedCount++
+
+	if len(s.Skipped) < MaxFailedPathsTracked {
+		s.Skipped = append(s.Skipped, path)
+	}
 }
 
 func (s *BackupStats) RecordFailure(path string) {
@@ -115,6 +127,12 @@ func (s *BackupStats) GetSuccess() int64 {
 	return s.Success
 }
 
+func (s *BackupStats) GetSkippedCount() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.SkippedCount
+}
+
 func (s *BackupStats) GetFailedCount() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -131,6 +149,12 @@ func (s *BackupStats) GetFailedSample() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.Failed)
+}
+
+func (s *BackupStats) GetSkippedSample() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.Skipped)
 }
 
 type StorageProvider struct {
@@ -282,9 +306,13 @@ func main() {
 	}
 
 	wg.Wait()
-	printSummary(stats, config, time.Since(pipelineStart))
 
-	if stats.GetFailedCount() > 0 {
+	// Did the entire pipeline process zero valid repositories?
+	allSkipped := stats.GetTotal() > 0 && stats.GetSkippedCount() == stats.GetTotal()
+
+	printSummary(stats, config, time.Since(pipelineStart), allSkipped)
+
+	if stats.GetFailedCount() > 0 || allSkipped {
 		os.Exit(1)
 	}
 	os.Exit(0)
@@ -298,7 +326,6 @@ func performOrasLogin(ctx context.Context, config *Config) error {
 		"--password-stdin",
 	)
 
-	// SECURITY FIX: Divert DOCKER_CONFIG to /tmp to prevent readOnlyRootFilesystem crashes
 	cmd.Env = append(os.Environ(), "DOCKER_CONFIG=/tmp/docker")
 	cmd.Stdin = strings.NewReader(config.RegistryToken)
 
@@ -355,9 +382,9 @@ func executeBackupWithRetry(parentCtx context.Context, config *Config, storage *
 	stats.RecordJob()
 	startTimer := time.Now()
 
-	isSuccessful := false
+	jobHandled := false
 	defer func() {
-		if !isSuccessful {
+		if !jobHandled {
 			stats.RecordFailure(registryPath)
 		}
 	}()
@@ -379,9 +406,17 @@ func executeBackupWithRetry(parentCtx context.Context, config *Config, storage *
 				"size_bytes", bytesUploaded,
 				"size_human", formatBytes(bytesUploaded))
 
-			isSuccessful = true
+			jobHandled = true
 			stats.RecordSuccess()
 			stats.AddBytes(bytesUploaded)
+			return
+		}
+
+		// GRACEFUL SKIP: If the repository doesn't exist, log it, record it, and exit immediately. No retries.
+		if strings.Contains(err.Error(), "repository name not known to registry") {
+			slog.Warn("repository_not_found_skipping", "registry_path", registryPath, "msg", "No artifacts exist for this repository/period.")
+			jobHandled = true
+			stats.RecordSkipped(registryPath)
 			return
 		}
 
@@ -416,11 +451,16 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 		return 0, fmt.Errorf("failed to generate random suffix: %w", err)
 	}
 
-	// THE UNIX HACK: Create a virtual symlink ending in .tar to force ORAS into
-	// archive mode, but redirect all bytes instantly to /dev/stdout.
+	osReader, osWriter, err := os.Pipe()
+	if err != nil {
+		return 0, fmt.Errorf("failed to create OS pipe: %w", err)
+	}
+
 	virtualTarPath := filepath.Join(os.TempDir(), fmt.Sprintf("stream-%s.tar", hex.EncodeToString(randBytes)))
-	if err := os.Symlink("/dev/stdout", virtualTarPath); err != nil {
-		return 0, fmt.Errorf("failed to create stdout symlink: %w", err)
+	if err := os.Symlink("/proc/self/fd/3", virtualTarPath); err != nil {
+		osReader.Close()
+		osWriter.Close()
+		return 0, fmt.Errorf("failed to create fd symlink: %w", err)
 	}
 	defer os.Remove(virtualTarPath)
 
@@ -429,10 +469,10 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 		remotePath += ".age"
 	}
 
-	pr, pw := io.Pipe()
-	defer pr.Close()
+	cloudReader, cloudWriter := io.Pipe()
+	defer cloudReader.Close()
 
-	counter := &byteCounter{Reader: pr}
+	counter := &byteCounter{Reader: cloudReader}
 	errChan := make(chan error, 1)
 
 	go func() {
@@ -442,7 +482,8 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 			if r := recover(); r != nil {
 				gErr = fmt.Errorf("CRITICAL: goroutine panicked: %v", r)
 			}
-			pw.CloseWithError(gErr)
+			cloudWriter.CloseWithError(gErr)
+			osReader.Close()
 			errChan <- gErr
 		}()
 
@@ -455,27 +496,22 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 			"--output", virtualTarPath,
 		)
 
-		// SECURITY FIX: Route credentials to volatile /tmp memory
+		cmd.ExtraFiles = []*os.File{osWriter}
 		cmd.Env = append(os.Environ(), "DOCKER_CONFIG=/tmp/docker")
 
 		stderrBuf := &tailBuffer{max: 8192}
+		cmd.Stdout = stderrBuf
 		cmd.Stderr = stderrBuf
-
-		orasReader, pipeErr := cmd.StdoutPipe()
-		if pipeErr != nil {
-			gErr = fmt.Errorf("failed to create stdout pipe: %w", pipeErr)
-			return
-		}
 
 		cmdStarted := false
 		if startErr := cmd.Start(); startErr != nil {
-			gErr = fmt.Errorf("failed to start oras command: %w\nORAS Logs:\n%s", startErr, stderrBuf.String())
+			gErr = fmt.Errorf("failed to start oras command: %w", startErr)
 			return
 		}
 		cmdStarted = true
 
-		// DEADLOCK FIX: cmd.Wait() is carefully declared BEFORE orasReader.Close().
-		// LIFO execution means orasReader.Close() runs first, sending SIGPIPE to unblock ORAS.
+		osWriter.Close()
+
 		defer func() {
 			if cmdStarted {
 				if gErr != nil && cmd.Process != nil {
@@ -484,16 +520,13 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 					}
 				}
 				if waitErr := cmd.Wait(); waitErr != nil {
-					waitWrap := fmt.Errorf("oras backup command failed: %w\nORAS Logs:\n%s", waitErr, strings.TrimSpace(stderrBuf.String()))
+					waitWrap := fmt.Errorf("oras backup command failed: %w | ORAS Logs: %s", waitErr, strings.TrimSpace(stderrBuf.String()))
 					gErr = errors.Join(gErr, waitWrap)
 				}
 			}
 		}()
 
-		// Executes FIRST to guarantee the read pipe drops and unblocks the OS process
-		defer orasReader.Close()
-
-		var currentWriter io.WriteCloser = pw
+		var currentWriter io.WriteCloser = cloudWriter
 
 		if config.EncryptionPassword != "" {
 			recipient, ageErr := age.NewScryptRecipient(config.EncryptionPassword)
@@ -528,9 +561,9 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 			return
 		}
 
-		if _, copyErr := io.Copy(gzipWriter, orasReader); copyErr != nil {
+		if _, copyErr := io.Copy(gzipWriter, osReader); copyErr != nil {
 			if errors.Is(copyErr, io.ErrClosedPipe) {
-				gErr = fmt.Errorf("stream closed prematurely by main thread (safe unblock)")
+				gErr = fmt.Errorf("stream closed prematurely by main thread")
 			} else {
 				gErr = fmt.Errorf("failed during stream copy: %w", copyErr)
 			}
@@ -547,7 +580,7 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 		uploadErr = fmt.Errorf("unsupported storage type: %s", storage.Type)
 	}
 
-	pr.Close()
+	cloudReader.Close()
 
 	if uploadErr != nil {
 		cancel()
@@ -709,8 +742,9 @@ func validateConfig(config *Config) error {
 	return nil
 }
 
-func printSummary(stats *BackupStats, config *Config, duration time.Duration) {
+func printSummary(stats *BackupStats, config *Config, duration time.Duration, allSkipped bool) {
 	failedCount := stats.GetFailedCount()
+	skippedCount := stats.GetSkippedCount()
 	totalBytes := stats.GetTotalBytes()
 
 	summary := map[string]any{
@@ -718,6 +752,7 @@ func printSummary(stats *BackupStats, config *Config, duration time.Duration) {
 		"total_targeted":      stats.GetTotal(),
 		"success_count":       stats.GetSuccess(),
 		"failed_count":        failedCount,
+		"skipped_count":       skippedCount,
 		"total_duration_secs": duration.Seconds(),
 		"total_bytes_raw":     totalBytes,
 		"total_bytes_human":   formatBytes(totalBytes),
@@ -726,9 +761,20 @@ func printSummary(stats *BackupStats, config *Config, duration time.Duration) {
 		"encryption_enabled":  config.EncryptionPassword != "",
 	}
 
+	if skippedCount > 0 {
+		summary["skipped_paths_sample"] = stats.GetSkippedSample()
+	}
+
 	if failedCount > 0 {
 		summary["failed_paths_sample"] = stats.GetFailedSample()
+	}
+
+	if allSkipped {
+		slog.Error("pipeline_failed_all_repos_missing", "summary", summary, "msg", "CRITICAL: No repositories were found on the registry to backup.")
+	} else if failedCount > 0 {
 		slog.Error("pipeline_completed_with_failures", "summary", summary)
+	} else if skippedCount > 0 {
+		slog.Info("pipeline_completed_with_skips", "summary", summary)
 	} else {
 		slog.Info("pipeline_completed_successfully", "summary", summary)
 	}
