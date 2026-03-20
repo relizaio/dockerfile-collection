@@ -1,7 +1,7 @@
-# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# Copyright Reliza Incorporated. 2019 - 2026. Licensed under the terms of MIT.
 # SPDX-License-Identifier: MIT
 
-FROM docker.io/library/debian:13.3-slim@sha256:1d3c811171a08a5adaa4a163fbafd96b61b87aa871bbc7aa15431ac275d3d430
+FROM docker.io/library/debian:13.4-slim@sha256:26f98ccd92fd0a44d6928ce8ff8f4921b4d2f535bfa07555ee5d18f61429cf0c
 
 ARG EXTRA_LOCALES
 ARG TARGETARCH
@@ -31,8 +31,8 @@ RUN apt-get update && \
     echo "=== Available PostgreSQL 17 versions ===" && \
     apt-cache madison postgresql-17 | head -10 && \
     apt-get install -y \
-        postgresql-17=17.8-0+deb13u1 \
-        postgresql-client-17=17.8-0+deb13u1 && \
+        postgresql-17=17.9-0+deb13u1 \
+        postgresql-client-17=17.9-0+deb13u1 && \
     apt-mark hold postgresql-17 postgresql-client-17
     # Setup PostgreSQL directories and permissions
 RUN mkdir -p /opt/relizaio/postgresql/{bin,share,conf,conf.default,logs,tmp} && \
@@ -60,7 +60,7 @@ COPY rootfs /
 RUN /opt/relizaio/scripts/postgresql/postunpack.sh && \
     /opt/relizaio/scripts/locales/generate-locales.sh
 
-ENV APP_VERSION="17.8.0" \
+ENV APP_VERSION="17.9.0" \
     RELIZAIO_APP_NAME="postgresql" \
     IMAGE_REVISION="6" \
     LANG="en_US.UTF-8" \
@@ -74,7 +74,7 @@ EXPOSE 5432
 
 USER 1001
 
-LABEL org.opencontainers.image.base.name="docker.io/library/debian:13.3-slim" \
+LABEL org.opencontainers.image.base.name="docker.io/library/debian:13.4-slim" \
       org.opencontainers.image.description="PostgreSQL 17 packaged by Reliza Incorporated" \
       org.opencontainers.image.documentation="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17/README.md" \
       org.opencontainers.image.source="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17"
@@ -84,7 +84,7 @@ LABEL ci_environment=$CI_ENV
 LABEL org.opencontainers.image.version=$VERSION
 LABEL org.opencontainers.image.vendor="Reliza Incorporated"
 LABEL org.opencontainers.image.title="ReARM PostgreSQL"
-LABEL PG_VERSION="17.8-0+deb13u1"
+LABEL PG_VERSION="17.9-0+deb13u1"
 
 
 ENTRYPOINT [ "/opt/relizaio/scripts/postgresql/entrypoint.sh" ]
