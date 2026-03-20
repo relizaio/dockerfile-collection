@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: RelizaHub Build And Submit ReARM PostgreSQL Release
-        uses: relizaio/rearm-docker-action@b32ed15a7356c2d06d02196defb84c6f33995055 # v1.8.0
+        uses: relizaio/rearm-docker-action@a2d6978bea42cc6d707515bb927f0c693427fe58 # v1.10.0
         with:
           registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
           registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
@@ -188,7 +188,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Build and submit release for PostgreSQL AWS CLI
-        uses: relizaio/rearm-docker-action@bff513d319274655789d68c0af4b9a4dc53bddd4 # v1.8.0
+        uses: relizaio/rearm-docker-action@a2d6978bea42cc6d707515bb927f0c693427fe58 # v1.10.0
         with:
           registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
           registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
@@ -213,7 +213,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Build and submit release for ORAS AWS CLI
-        uses: relizaio/rearm-docker-action@bff513d319274655789d68c0af4b9a4dc53bddd4 # v1.8.0
+        uses: relizaio/rearm-docker-action@a2d6978bea42cc6d707515bb927f0c693427fe58 # v1.10.0
         with:
           registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
           registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
@@ -237,7 +237,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Build and submit release for OCI Backups
-        uses: relizaio/rearm-docker-action@5038cf24067c7a71400b633819c3eb97b17aa5c1 # v1.8.0
+        uses: relizaio/rearm-docker-action@a2d6978bea42cc6d707515bb927f0c693427fe58 # v1.10.0
         with:
           registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
           registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
