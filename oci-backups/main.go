@@ -64,6 +64,8 @@ type Config struct {
 	AzureClientID       string
 	AzureClientSecret   string
 	AzureContainer      string
+
+	UsePlainHTTP bool
 }
 
 type BackupStats struct {
@@ -321,10 +323,14 @@ func main() {
 func performOrasLogin(ctx context.Context, config *Config) error {
 	slog.Info("authenticating_with_registry", "host", config.RegistryHost)
 
-	cmd := exec.CommandContext(ctx, "oras", "login", config.RegistryHost,
+	loginArgs := []string{"login", config.RegistryHost,
 		"--username", config.RegistryUsername,
 		"--password-stdin",
-	)
+	}
+	if config.UsePlainHTTP {
+		loginArgs = append(loginArgs, "--plain-http")
+	}
+	cmd := exec.CommandContext(ctx, "oras", loginArgs...)
 
 	cmd.Env = append(os.Environ(), "DOCKER_CONFIG=/tmp/docker")
 	cmd.Stdin = strings.NewReader(config.RegistryToken)
@@ -492,9 +498,11 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 			return
 		}
 
-		cmd := exec.CommandContext(ctx, "oras", "backup", fullPath,
-			"--output", virtualTarPath,
-		)
+		backupArgs := []string{"backup", fullPath, "--output", virtualTarPath}
+		if config.UsePlainHTTP {
+			backupArgs = append(backupArgs, "--plain-http")
+		}
+		cmd := exec.CommandContext(ctx, "oras", backupArgs...)
 
 		cmd.ExtraFiles = []*os.File{osWriter}
 		cmd.Env = append(os.Environ(), "DOCKER_CONFIG=/tmp/docker")
@@ -671,6 +679,9 @@ func loadConfig() (*Config, error) {
 	if rawPaths != "" {
 		config.RegistryBasePaths = strings.Split(rawPaths, ",")
 	}
+
+	config.UsePlainHTTP = strings.EqualFold(os.Getenv("USE_PLAIN_HTTP"), "true")
+
 	return config, nil
 }
 
