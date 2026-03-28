@@ -580,11 +580,12 @@ func performStreamBackup(parentCtx context.Context, config *Config, storage *Sto
 	}()
 
 	var uploadErr error
-	if storage.Type == "s3" {
+	switch storage.Type {
+	case "s3":
 		uploadErr = uploadToS3Stream(ctx, config, storage.S3Client, counter, remotePath)
-	} else if storage.Type == "azure" {
+	case "azure":
 		uploadErr = uploadToAzureStream(ctx, config, storage.AzClient, counter, remotePath)
-	} else {
+	default:
 		uploadErr = fmt.Errorf("unsupported storage type: %s", storage.Type)
 	}
 
