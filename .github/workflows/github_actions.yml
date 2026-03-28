@@ -258,6 +258,8 @@ jobs:
           source_code_sbom_type: go
 
   build-skopeo-backuper:
+    permissions:
+      id-token: write
     runs-on: ubuntu-latest
     steps:
       - name: Build and submit release for Skopeo Backuper
