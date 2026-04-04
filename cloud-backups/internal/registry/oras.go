@@ -81,6 +81,9 @@ func (c *OrasClient) Backup(ctx context.Context, registryPath string, out io.Wri
 		if strings.Contains(logs, "unauthorized") || strings.Contains(logs, "authentication required") {
 			return fmt.Errorf("unauthorized to access %s: check token scopes", fullPath)
 		}
+		if strings.Contains(logs, "not found") || strings.Contains(logs, "404") {
+			return fmt.Errorf("repository name not known to registry: %s", fullPath)
+		}
 		return errors.Join(copyErr, fmt.Errorf("oras backup failed: %w | Logs: %s", waitErr, logs))
 	}
 	return nil
