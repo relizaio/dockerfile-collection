@@ -18,6 +18,7 @@ type AppConfig struct {
 	MaxConcurrentJobs   int      `mapstructure:"max-concurrent-jobs"`
 	RegistryBasePaths   []string `mapstructure:"registry-base-paths"`
 	AppendRollingMonths bool     `mapstructure:"append-rolling-months"`
+	PlainHTTP           bool     `mapstructure:"plain-http"`
 
 	// PG fields
 	PGHost     string `mapstructure:"pg-host"`

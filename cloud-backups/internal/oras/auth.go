@@ -14,14 +14,18 @@ type AuthContext struct {
 }
 
 // Login creates a secure sandbox and authenticates
-func Login(ctx context.Context, host, username, token string) (*AuthContext, error) {
+func Login(ctx context.Context, host, username, token string, plainHTTP bool) (*AuthContext, error) {
 	// 1. Create a dynamic, secure sandbox for this session
 	tmpDir, err := os.MkdirTemp("", "oci-backup-auth-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create auth sandbox: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "oras", "login", host, "--username", username, "--password-stdin")
+	args := []string{"login", host, "--username", username, "--password-stdin"}
+	if plainHTTP {
+		args = append(args, "--plain-http")
+	}
+	cmd := exec.CommandContext(ctx, "oras", args...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_CONFIG=%s", tmpDir))
 	cmd.Stdin = strings.NewReader(token)
 

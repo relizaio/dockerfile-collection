@@ -17,13 +17,14 @@ import (
 
 // OrasClient implements Client by shelling out to the oras CLI.
 type OrasClient struct {
-	host    string
-	authDir string
+	host      string
+	authDir   string
+	plainHTTP bool
 }
 
 // New returns an OrasClient for the given registry host and docker config directory.
-func New(host, authDir string) *OrasClient {
-	return &OrasClient{host: host, authDir: authDir}
+func New(host, authDir string, plainHTTP bool) *OrasClient {
+	return &OrasClient{host: host, authDir: authDir, plainHTTP: plainHTTP}
 }
 
 // Backup runs `oras backup` and streams the resulting tar archive to out.
@@ -48,7 +49,11 @@ func (c *OrasClient) Backup(ctx context.Context, registryPath string, out io.Wri
 	}
 	defer os.Remove(virtualTarPath)
 
-	cmd := exec.CommandContext(ctx, "oras", "backup", fullPath, "--output", virtualTarPath)
+	backupArgs := []string{"backup", fullPath, "--output", virtualTarPath}
+	if c.plainHTTP {
+		backupArgs = append(backupArgs, "--plain-http")
+	}
+	cmd := exec.CommandContext(ctx, "oras", backupArgs...)
 	cmd.ExtraFiles = []*os.File{osWriter}
 	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_CONFIG=%s", c.authDir))
 
@@ -102,7 +107,11 @@ func (c *OrasClient) Restore(ctx context.Context, registryPath string, in io.Rea
 		return fmt.Errorf("failed to flush temp file: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "oras", "restore", "--input", tmpPath, fullPath)
+	restoreArgs := []string{"restore", "--input", tmpPath, fullPath}
+	if c.plainHTTP {
+		restoreArgs = append(restoreArgs, "--plain-http")
+	}
+	cmd := exec.CommandContext(ctx, "oras", restoreArgs...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_CONFIG=%s", c.authDir))
 
 	stderrBuf := &tailBuffer{max: 8192}
@@ -122,17 +131,26 @@ func (c *OrasClient) Restore(ctx context.Context, registryPath string, in io.Rea
 // PreflightCheck runs `oras repo tags` as a lightweight pull-access probe.
 func (c *OrasClient) PreflightCheck(ctx context.Context, registryPath string) error {
 	fullPath := fmt.Sprintf("%s/%s", c.host, registryPath)
-	cmd := exec.CommandContext(ctx, "oras", "repo", "tags", fullPath)
+	preflightArgs := []string{"repo", "tags", fullPath}
+	if c.plainHTTP {
+		preflightArgs = append(preflightArgs, "--plain-http")
+	}
+	cmd := exec.CommandContext(ctx, "oras", preflightArgs...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_CONFIG=%s", c.authDir))
 
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Run(); err != nil {
-		if logs := stderrBuf.String(); strings.Contains(logs, "unauthorized") || strings.Contains(logs, "authentication required") {
+		logs := stderrBuf.String()
+		if strings.Contains(logs, "unauthorized") || strings.Contains(logs, "authentication required") {
 			return fmt.Errorf("unauthorized to access %s: check token scopes", fullPath)
 		}
-		// Repo-not-found is acceptable; the pipeline handles missing repos gracefully.
+		if strings.Contains(logs, "not found") || strings.Contains(logs, "404") {
+			// Repo-not-found is acceptable; the pipeline handles missing repos gracefully.
+			return nil
+		}
+		return fmt.Errorf("preflight check failed for %s: %w | Logs: %s", fullPath, err, strings.TrimSpace(logs))
 	}
 	return nil
 }

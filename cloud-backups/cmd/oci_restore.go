@@ -54,6 +54,7 @@ func runRestore(cmd *cobra.Command) error {
 		AzureContainer:      viper.GetString("azure-container"),
 		BackupFile:          mustGetString(cmd, "backup-file"),
 		RestoreTo:           mustGetString(cmd, "restore-to"),
+		PlainHTTP:           viper.GetBool("plain-http"),
 	}
 	if err := cfg.ValidateRestore(); err != nil {
 		slog.Error("validation_error", "error", err.Error())
@@ -78,14 +79,14 @@ func runRestore(cmd *cobra.Command) error {
 	}()
 
 	// 3. Auth & storage
-	authCtx, err := oras.Login(ctx, cfg.RegistryHost, cfg.RegistryUsername, cfg.RegistryToken)
+	authCtx, err := oras.Login(ctx, cfg.RegistryHost, cfg.RegistryUsername, cfg.RegistryToken, cfg.PlainHTTP)
 	if err != nil {
 		slog.Error("registry_login_failed", "error", err.Error())
 		return err
 	}
 	defer authCtx.Cleanup() // guaranteed to run — no os.Exit below this point
 
-	regClient := registry.New(cfg.RegistryHost, authCtx.ConfigDir)
+	regClient := registry.New(cfg.RegistryHost, authCtx.ConfigDir, cfg.PlainHTTP)
 
 	storeProvider, err := storage.New(ctx, cfg.StorageConfig())
 	if err != nil {

@@ -20,6 +20,7 @@ func init() {
 	ociCmd.PersistentFlags().String("registry-username", "", "Registry authentication username (ENV: REGISTRY_USERNAME)")
 	ociCmd.PersistentFlags().String("registry-token", "", "Registry authentication token (ENV: REGISTRY_TOKEN)")
 	ociCmd.PersistentFlags().Int("max-concurrent-jobs", 3, "Number of simultaneous streams (ENV: MAX_CONCURRENT_JOBS)")
+	ociCmd.PersistentFlags().Bool("plain-http", false, "Use plain HTTP instead of HTTPS for the registry (ENV: PLAIN_HTTP)")
 
 	mustBindPFlag := func(key, flagName string) {
 		if err := viper.BindPFlag(key, ociCmd.PersistentFlags().Lookup(flagName)); err != nil {
@@ -30,4 +31,5 @@ func init() {
 	mustBindPFlag("registry-username", "registry-username")
 	mustBindPFlag("registry-token", "registry-token")
 	mustBindPFlag("max-concurrent-jobs", "max-concurrent-jobs")
+	mustBindPFlag("plain-http", "plain-http")
 }
