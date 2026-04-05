@@ -1,4 +1,4 @@
-FROM verdaccio/verdaccio:6.0.5@sha256:58353ed1b53ebb3e6fc2925a5384f70a4aa3ddac7a1402d717a39951e7ab43ad
+FROM verdaccio/verdaccio:6.3.2@sha256:3f533981ed514088088df91cf57fcb422c5a5193e657dd609b6bca425b81c13c
 
 # Switch to root to install dependencies
 USER root
