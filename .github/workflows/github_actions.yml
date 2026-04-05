@@ -60,22 +60,25 @@ jobs:
     name: Build And Push Reliza Verdaccio
     runs-on: ubuntu-latest
     steps:
-      - name: RelizaHub Build And Submit Reliza Verdaccio Release
-        uses: relizaio/reliza-docker-action@a8ba201f314e111885f1ec036e8eeabcb02739be # v3.14
+      - name: ReARM Build And Submit Reliza Verdaccio Release
+        uses: relizaio/rearm-docker-action@a2d6978bea42cc6d707515bb927f0c693427fe58 # v1.10.0
         with:
           registry_username: ${{ secrets.RELIZA_LIBRARY_DOCKER_LOGIN }}
           registry_password: ${{ secrets.RELIZA_LIBRARY_DOCKER_TOKEN }}
           registry_host: registry.relizahub.com
           image_namespace: registry.relizahub.com/library
           image_name: reliza-verdaccio
-          reliza_api_id: ${{ secrets.RELIZA_VERDACCIO_API_ID }}
-          reliza_api_key: ${{ secrets.RELIZA_VERDACCIO_API_KEY }}
+          rearm_api_id: ${{ secrets.RELIZA_VERDACCIO_API_ID }}
+          rearm_api_key: ${{ secrets.RELIZA_VERDACCIO_API_KEY }}
+          rearm_api_url: https://reliza.rearmhq.com
           path: verdaccio
           push_to_rearm: 'true'
-          rearm_api_id: ${{ secrets.REARM_RELIZA_VERDACCIO_API_ID }}
-          rearm_api_key: ${{ secrets.REARM_RELIZA_VERDACCIO_API_KEY }}
+          rearm_mirror_api_id: ${{ secrets.REARM_RELIZA_VERDACCIO_API_ID }}
+          rearm_mirror_api_key: ${{ secrets.REARM_RELIZA_VERDACCIO_API_KEY }}
+          rearm_mirror_api_url: https://demo.rearmhq.com
+          enable_sbom: true
           source_code_sbom_type: 'npm'
-          rearm_enable_public_cosign_sigstore: 'true'
+          enable_public_cosign_sigstore: 'true'
   build-reliza-kubectl:
     permissions:
       id-token: write
