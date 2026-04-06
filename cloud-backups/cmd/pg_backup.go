@@ -119,7 +119,7 @@ func runPGBackup() error {
 	pipelineStart := time.Now()
 
 	slog.Info("pg_backup_started", "database", cfg.PGDatabase, "storage", cfg.StorageType, "encryption_enabled", cfg.EncryptionPassword != "")
-	pipeline.RunWithRetry(ctx, pgClient, storeProvider, cfg.PGDatabase, cfg.DumpPrefix, nameSuffix, writerMods, tracker, cfg.Timeout)
+	pipeline.RunWithRetry(ctx, pgClient, storeProvider, cfg.PGDatabase, cfg.DumpPrefix, nameSuffix, writerMods, tracker, cfg.Timeout, false)
 
 	stats.PrintSummary("pg_backup_completed", tracker, cfg.StorageType, time.Since(pipelineStart))
 	if tracker.GetFailedCount() > 0 {

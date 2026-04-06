@@ -30,7 +30,7 @@ var (
 // RunWithRetry handles the retry logic and graceful degradation for missing source targets.
 // nameSuffix is appended to the remote filename (e.g. ".tar.gz" or ".tar.gz.age").
 // writerModifiers are applied in order to the upload stream (compress, then encrypt).
-func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, tracker *stats.Tracker, timeout time.Duration) {
+func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, tracker *stats.Tracker, timeout time.Duration, deterministicName bool) {
 	tracker.RecordJob()
 	startTimer := time.Now()
 	jobHandled := false
@@ -45,7 +45,7 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 			return
 		}
 		slog.Info("backup_started", "target", target, "attempt", attempt)
-		bytesUploaded, err := executeStream(ctx, src, storeProvider, target, backupName, nameSuffix, writerModifiers, timeout)
+		bytesUploaded, err := executeStream(ctx, src, storeProvider, target, backupName, nameSuffix, writerModifiers, timeout, deterministicName)
 		if err == nil {
 			slog.Info("backup_successful", "target", target, "duration", time.Since(startTimer).Round(time.Second).String(), "size_human", stats.FormatBytes(bytesUploaded))
 			jobHandled = true
@@ -86,19 +86,24 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 	slog.Error("backup_exhausted", "target", target)
 }
 
-func executeStream(parentCtx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, timeout time.Duration) (int64, error) {
+func executeStream(parentCtx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, timeout time.Duration, deterministicName bool) (int64, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
 	ctx, cancel := context.WithTimeoutCause(parentCtx, timeout, fmt.Errorf("backup timed out"))
 	defer cancel()
 
-	timestamp := time.Now().UTC().Format("2006-01-02-15-04-05")
-	randBytes := make([]byte, 8)
-	if _, err := rand.Read(randBytes); err != nil {
-		return 0, fmt.Errorf("failed to generate random bytes: %w", err)
+	var remotePath string
+	if deterministicName {
+		remotePath = backupName + nameSuffix
+	} else {
+		timestamp := time.Now().UTC().Format("2006-01-02-15-04-05")
+		randBytes := make([]byte, 8)
+		if _, err := rand.Read(randBytes); err != nil {
+			return 0, fmt.Errorf("failed to generate random bytes: %w", err)
+		}
+		remotePath = fmt.Sprintf("%s-%s-%s%s", backupName, timestamp, hex.EncodeToString(randBytes), nameSuffix)
 	}
-	remotePath := fmt.Sprintf("%s-%s-%s%s", backupName, timestamp, hex.EncodeToString(randBytes), nameSuffix)
 
 	cloudReader, cloudWriter := io.Pipe()
 	defer cloudReader.Close()

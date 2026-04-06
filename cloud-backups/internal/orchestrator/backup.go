@@ -30,14 +30,15 @@ func buildWriterModifiers(encPassword string) (nameSuffix string, mods []pipelin
 
 // BackupManager orchestrates concurrent backup jobs.
 type BackupManager struct {
-	Storage     storage.Provider
-	StorageType string
-	Tracker     *stats.Tracker
-	Concurrency int
-	DataSource  datasource.Source
-	EncPassword string // used only to build the modifier chain
-	DumpPrefix  string
-	Timeout     time.Duration
+	Storage           storage.Provider
+	StorageType       string
+	Tracker           *stats.Tracker
+	Concurrency       int
+	DataSource        datasource.Source
+	EncPassword       string // used only to build the modifier chain
+	DumpPrefix        string
+	Timeout           time.Duration
+	DeterministicName bool // when true, use last path segment as filename (no timestamp/random) — overwrites on re-run
 }
 
 // RunBackups resolves the final target list and fans out concurrent backup workers.
@@ -56,8 +57,14 @@ func (m *BackupManager) RunBackups(ctx context.Context, basePaths []string, roll
 	var wg sync.WaitGroup
 
 	for _, path := range finalTargets {
-		safeName := strings.ReplaceAll(path, "/", "-")
-		backupName := fmt.Sprintf("%s-%s", m.DumpPrefix, safeName)
+		var backupName string
+		if m.DeterministicName {
+			parts := strings.Split(path, "/")
+			backupName = parts[len(parts)-1]
+		} else {
+			safeName := strings.ReplaceAll(path, "/", "-")
+			backupName = fmt.Sprintf("%s-%s", m.DumpPrefix, safeName)
+		}
 
 		wg.Add(1)
 		nameSuffix, writerMods := buildWriterModifiers(m.EncPassword)
@@ -73,7 +80,7 @@ func (m *BackupManager) RunBackups(ctx context.Context, basePaths []string, roll
 			}
 			defer func() { <-sem }()
 
-			pipeline.RunWithRetry(ctx, m.DataSource, m.Storage, targetPath, fileName, nameSuffix, writerMods, m.Tracker, m.Timeout)
+			pipeline.RunWithRetry(ctx, m.DataSource, m.Storage, targetPath, fileName, nameSuffix, writerMods, m.Tracker, m.Timeout, m.DeterministicName)
 		}(path, backupName)
 	}
 

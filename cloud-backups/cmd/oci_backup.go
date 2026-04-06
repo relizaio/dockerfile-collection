@@ -113,14 +113,15 @@ func runBackup() error {
 	pipelineStart := time.Now()
 
 	manager := &orchestrator.BackupManager{
-		Storage:     storeProvider,
-		StorageType: cfg.StorageType,
-		Tracker:     tracker,
-		Concurrency: cfg.MaxConcurrentJobs,
-		DataSource:  regClient,
-		EncPassword: cfg.EncryptionPassword,
-		DumpPrefix:  cfg.DumpPrefix,
-		Timeout:     cfg.Timeout,
+		Storage:           storeProvider,
+		StorageType:       cfg.StorageType,
+		Tracker:           tracker,
+		Concurrency:       cfg.MaxConcurrentJobs,
+		DataSource:        regClient,
+		EncPassword:       cfg.EncryptionPassword,
+		DumpPrefix:        cfg.DumpPrefix,
+		Timeout:           cfg.Timeout,
+		DeterministicName: true,
 	}
 	manager.RunBackups(ctx, basePaths, cfg.AppendRollingMonths)
 
