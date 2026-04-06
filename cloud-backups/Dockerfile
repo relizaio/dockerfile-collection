@@ -33,7 +33,6 @@ ARG CI_ENV=noci
 ARG GIT_COMMIT=git_commit_undefined
 ARG GIT_BRANCH=git_branch_undefined
 ARG VERSION=not_versioned
-ENV ORAS_VERSION="1.3.0"
 
 LABEL org.opencontainers.image.vendor="Reliza Incorporated"
 LABEL org.opencontainers.image.title="Cloud Backup Tool"
