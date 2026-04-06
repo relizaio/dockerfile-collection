@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +83,7 @@ func (c *OrasClient) Backup(ctx context.Context, registryPath string, out io.Wri
 			return fmt.Errorf("unauthorized to access %s: check token scopes", fullPath)
 		}
 		if strings.Contains(logs, "not found") || strings.Contains(logs, "404") {
+			slog.Warn("oras_backup_repository_not_found", "path", fullPath)
 			return fmt.Errorf("repository name not known to registry: %s", fullPath)
 		}
 		return errors.Join(copyErr, fmt.Errorf("oras backup failed: %w | Logs: %s", waitErr, logs))
@@ -150,7 +152,7 @@ func (c *OrasClient) PreflightCheck(ctx context.Context, registryPath string) er
 			return fmt.Errorf("unauthorized to access %s: check token scopes", fullPath)
 		}
 		if strings.Contains(logs, "not found") || strings.Contains(logs, "404") {
-			// Repo-not-found is acceptable; the pipeline handles missing repos gracefully.
+			slog.Warn("oras_preflight_repository_not_found", "path", fullPath)
 			return nil
 		}
 		return fmt.Errorf("preflight check failed for %s: %w | Logs: %s", fullPath, err, strings.TrimSpace(logs))
