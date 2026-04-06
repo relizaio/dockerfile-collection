@@ -46,7 +46,7 @@ func init() {
 	rootCmd.PersistentFlags().String("backup-storage-type", "s3", "Destination cloud provider: s3 or azure (ENV: BACKUP_STORAGE_TYPE)")
 	rootCmd.PersistentFlags().String("encryption-password", "", "Password for age encryption (ENV: ENCRYPTION_PASSWORD)")
 	rootCmd.PersistentFlags().String("dump-prefix", "backup", "Prefix attached to the final backup filename (ENV: DUMP_PREFIX)")
-	rootCmd.PersistentFlags().String("timeout", "2h", "Per-job stream timeout, e.g. 2h, 90m (ENV: TIMEOUT)")
+	rootCmd.PersistentFlags().String("timeout", "12h", "Per-job stream timeout, e.g. 2h, 90m (ENV: TIMEOUT)")
 
 	// AWS S3 credentials
 	rootCmd.PersistentFlags().String("aws-bucket", "", "S3 bucket name (ENV: AWS_BUCKET)")
