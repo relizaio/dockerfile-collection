@@ -260,23 +260,15 @@ func validPGRestoreConfig() *AppConfig {
 func TestValidatePGRestore_MissingBackupFile(t *testing.T) {
 	c := validPGRestoreConfig()
 	c.BackupFile = ""
-	if err := c.ValidatePGRestore(false); err == nil {
+	if err := c.ValidatePGRestore(); err == nil {
 		t.Fatal("expected error for missing backup file")
-	}
-}
-
-func TestValidatePGRestore_DownloadOnly_MissingOutput(t *testing.T) {
-	c := validPGRestoreConfig()
-	c.OutputFile = ""
-	if err := c.ValidatePGRestore(true); err == nil {
-		t.Fatal("expected error for missing output in download-only mode")
 	}
 }
 
 func TestValidatePGRestore_MissingRestoreTo(t *testing.T) {
 	c := validPGRestoreConfig()
 	c.RestoreTo = ""
-	if err := c.ValidatePGRestore(false); err == nil {
+	if err := c.ValidatePGRestore(); err == nil {
 		t.Fatal("expected error for missing restore-to")
 	}
 }
@@ -284,8 +276,7 @@ func TestValidatePGRestore_MissingRestoreTo(t *testing.T) {
 func TestValidatePGRestore_MissingPGHost(t *testing.T) {
 	c := validPGRestoreConfig()
 	c.PGHost = ""
-	// pg_restore may or may not be in PATH; error should mention pg-host
-	err := c.ValidatePGRestore(false)
+	err := c.ValidatePGRestore()
 	if err == nil {
 		t.Fatal("expected error for missing pg-host")
 	}
@@ -294,7 +285,7 @@ func TestValidatePGRestore_MissingPGHost(t *testing.T) {
 func TestValidatePGRestore_MissingDatabase(t *testing.T) {
 	c := validPGRestoreConfig()
 	c.PGDatabase = ""
-	err := c.ValidatePGRestore(false)
+	err := c.ValidatePGRestore()
 	if err == nil {
 		t.Fatal("expected error for missing pg-database")
 	}
@@ -303,9 +294,48 @@ func TestValidatePGRestore_MissingDatabase(t *testing.T) {
 func TestValidatePGRestore_MissingUser(t *testing.T) {
 	c := validPGRestoreConfig()
 	c.PGUser = ""
-	err := c.ValidatePGRestore(false)
+	err := c.ValidatePGRestore()
 	if err == nil {
 		t.Fatal("expected error for missing pg-user")
+	}
+}
+
+// --- ValidateDownload ---
+
+func validDownloadConfig() *AppConfig {
+	c := validS3Config()
+	c.BackupFile = "backup.tar.gz"
+	c.OutputFile = "/tmp/backup.tar.gz"
+	return c
+}
+
+func TestValidateDownload_Valid(t *testing.T) {
+	if err := validDownloadConfig().ValidateDownload(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateDownload_MissingBackupFile(t *testing.T) {
+	c := validDownloadConfig()
+	c.BackupFile = ""
+	if err := c.ValidateDownload(); err == nil {
+		t.Fatal("expected error for missing backup file")
+	}
+}
+
+func TestValidateDownload_MissingOutput(t *testing.T) {
+	c := validDownloadConfig()
+	c.OutputFile = ""
+	if err := c.ValidateDownload(); err == nil {
+		t.Fatal("expected error for missing output")
+	}
+}
+
+func TestValidateDownload_MissingStorage(t *testing.T) {
+	c := validDownloadConfig()
+	c.AWSBucket = ""
+	if err := c.ValidateDownload(); err == nil {
+		t.Fatal("expected error for missing storage config")
 	}
 }
 

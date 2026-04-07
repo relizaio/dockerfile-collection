@@ -8,8 +8,10 @@ A unified backup tool that streams OCI registry artifacts and PostgreSQL databas
 cloud-backup oci backup          # Stream OCI artifacts to cloud storage
 cloud-backup oci restore         # Restore a single OCI backup from cloud storage to a registry
 cloud-backup oci restore-rolling # Restore the most recent backup per repo/month in a rolling window
+cloud-backup oci download        # Download and decrypt an OCI backup archive to a local file
 cloud-backup pg backup           # Stream a PostgreSQL pg_dump to cloud storage
 cloud-backup pg restore          # Restore a PostgreSQL backup from cloud storage
+cloud-backup pg download         # Download and decrypt a PostgreSQL backup file to a local file
 ```
 
 ## Shared flags (all subcommands)
@@ -149,15 +151,29 @@ cloud-backup oci restore-rolling \
 # Restores Nov-2025, Dec-2025, Jan-2026 for each repo
 ```
 
-### OCI manual restore
+### `oci download` flags
+
+Downloads a backup archive from cloud storage to a local file. Decrypts it if it has a `.age` suffix.
+No registry credentials required.
+
+| Flag | Env Variable | Description |
+| --- | --- | --- |
+| `--backup-file` | `BACKUP_FILE` | Remote backup file name in cloud storage |
+| `--output` | `OUTPUT` | Local output file path |
 
 ```bash
-# Decrypt (only if encrypted)
-age -d -o restored.tar.gz downloaded.tar.gz.age
+# Download and decrypt an OCI backup archive for manual inspection or push
+cloud-backup oci download \
+  --backup-storage-type s3 \
+  --aws-bucket my-backup-bucket --aws-region us-east-1 \
+  --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
+  --backup-file "repo1.tar.gz.age" \
+  --encryption-password "$ENC_PASSWORD" \
+  --output ./repo1.tar.gz
 
-# Decompress and push
-gunzip restored.tar.gz
-oras restore --input ./restored.tar registry.example.com/namespace/repo
+# Then manually push to a registry:
+gunzip repo1.tar.gz
+oras restore --input ./repo1.tar registry.example.com/namespace/repo
 ```
 
 ---
@@ -183,8 +199,6 @@ Streams `pg_dump -Fc` output directly to cloud storage. The custom format is alr
 | --- | --- | --- |
 | `--backup-file` | `BACKUP_FILE` | Remote path of the backup file in cloud storage |
 | `--restore-to` | `RESTORE_TO` | Target database name for `pg_restore` (optional — defaults to `--pg-database`) |
-| `--download-only` | — | Download and decrypt to a local file instead of running `pg_restore` |
-| `--output` | `OUTPUT` | Local output file path (required with `--download-only`) |
 
 ### PG examples
 
@@ -217,13 +231,27 @@ cloud-backup pg restore \
   --backup-file "prod-mydb-2025-01-15-03-00-00-abc123.dump" \
   --restore-to mydb_restored
 
-# Download-only (manual pg_restore)
-cloud-backup pg restore \
+```
+
+### `pg download` flags
+
+Downloads a backup file from cloud storage to a local file. Decrypts it if it has a `.age` suffix.
+No PG connection required.
+
+| Flag | Env Variable | Description |
+| --- | --- | --- |
+| `--backup-file` | `BACKUP_FILE` | Remote backup file name in cloud storage |
+| `--output` | `OUTPUT` | Local output file path |
+
+```bash
+# Download and decrypt a PG backup for manual restore
+cloud-backup pg download \
   --backup-storage-type s3 \
   --aws-bucket my-backup-bucket --aws-region us-east-1 \
   --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
-  --backup-file "prod-mydb-2025-01-15-03-00-00-abc123.dump" \
-  --download-only --output ./backup.dump
+  --backup-file "prod-mydb-2025-01-15.dump.age" \
+  --encryption-password "$ENC_PASSWORD" \
+  --output ./backup.dump
 
 # Then restore manually:
 pg_restore -h <PG_HOST> -U <PG_USER> -d <PG_DATABASE> --clean backup.dump

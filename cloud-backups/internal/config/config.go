@@ -148,17 +148,22 @@ func (c *AppConfig) ValidatePGBackup() error {
 	return c.validateStorage()
 }
 
-// ValidatePGRestore checks all fields required for the PG restore command.
-// If downloadOnly is true, PG connection fields are not required.
-func (c *AppConfig) ValidatePGRestore(downloadOnly bool) error {
+// ValidateDownload checks all fields required for the oci/pg download commands.
+// No registry or PG connection is needed — only storage credentials and file paths.
+func (c *AppConfig) ValidateDownload() error {
 	if c.BackupFile == "" {
 		return fmt.Errorf("--backup-file / BACKUP_FILE is required")
 	}
-	if downloadOnly {
-		if c.OutputFile == "" {
-			return fmt.Errorf("--output is required when --download-only is set")
-		}
-		return c.validateStorage()
+	if c.OutputFile == "" {
+		return fmt.Errorf("--output / OUTPUT is required")
+	}
+	return c.validateStorage()
+}
+
+// ValidatePGRestore checks all fields required for the PG restore command.
+func (c *AppConfig) ValidatePGRestore() error {
+	if c.BackupFile == "" {
+		return fmt.Errorf("--backup-file / BACKUP_FILE is required")
 	}
 	if c.RestoreTo == "" {
 		return fmt.Errorf("--restore-to / RESTORE_TO is required")

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -23,20 +22,15 @@ import (
 var pgRestoreCmd = &cobra.Command{
 	Use:   "restore",
 	Short: "Restore a PostgreSQL backup from cloud storage",
-	Long: `Restore a PostgreSQL backup from cloud storage.
-
-Default mode: downloads, decrypts, and pipes directly into pg_restore.
-With --download-only: downloads and decrypts to a local file for manual pg_restore.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		downloadOnly, _ := cmd.Flags().GetBool("download-only")
-		if err := runPGRestore(cmd, downloadOnly); err != nil {
+		if err := runPGRestore(cmd); err != nil {
 			os.Exit(1)
 		}
 		os.Exit(0)
 	},
 }
 
-func runPGRestore(cmd *cobra.Command, downloadOnly bool) error {
+func runPGRestore(cmd *cobra.Command) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
@@ -67,9 +61,8 @@ func runPGRestore(cmd *cobra.Command, downloadOnly bool) error {
 		AzureContainer:      viper.GetString("azure-container"),
 		BackupFile:          mustGetString(cmd, "backup-file"),
 		RestoreTo:           mustGetString(cmd, "restore-to"),
-		OutputFile:          mustGetString(cmd, "output"),
 	}
-	if err := cfg.ValidatePGRestore(downloadOnly); err != nil {
+	if err := cfg.ValidatePGRestore(); err != nil {
 		slog.Error("validation_error", "error", err.Error())
 		return err
 	}
@@ -107,9 +100,6 @@ func runPGRestore(cmd *cobra.Command, downloadOnly bool) error {
 	}
 	_ = baseName // remaining suffix (.dump) needs no further decompression
 
-	if downloadOnly {
-		return runPGDownloadOnly(ctx, storeProvider, cfg, readerMods)
-	}
 	return runPGFullRestore(ctx, storeProvider, cfg, readerMods)
 }
 
@@ -138,58 +128,9 @@ func runPGFullRestore(ctx context.Context, storeProvider storage.Provider, cfg *
 	return nil
 }
 
-// runPGDownloadOnly downloads + decrypts to a local file for manual pg_restore.
-func runPGDownloadOnly(ctx context.Context, storeProvider storage.Provider, cfg *config.AppConfig, readerMods []pipeline.ReaderModifier) error {
-	slog.Info("pg_download_started", "backup_file", cfg.BackupFile, "output", cfg.OutputFile)
-
-	outFile, err := os.Create(cfg.OutputFile)
-	if err != nil {
-		slog.Error("failed_to_create_output_file", "error", err.Error())
-		return fmt.Errorf("failed to create output file %q: %w", cfg.OutputFile, err)
-	}
-	defer outFile.Close()
-
-	// Download → apply reader modifiers → write to local file
-	cloudR, cloudW := io.Pipe()
-	errChan := make(chan error, 1)
-
-	go func() {
-		if dlErr := storeProvider.DownloadStream(ctx, cfg.BackupFile, cloudW); dlErr != nil {
-			cloudW.CloseWithError(dlErr)
-			errChan <- dlErr
-			return
-		}
-		cloudW.Close()
-		errChan <- nil
-	}()
-
-	reader, applyErr := pipeline.ApplyReaderModifiers(cloudR, readerMods)
-	if applyErr != nil {
-		cloudR.Close()
-		<-errChan
-		return fmt.Errorf("failed to apply reader modifiers: %w", applyErr)
-	}
-
-	if _, copyErr := io.Copy(outFile, reader); copyErr != nil {
-		cloudR.Close()
-		<-errChan
-		return fmt.Errorf("failed to write output file: %w", copyErr)
-	}
-
-	cloudR.Close()
-	if dlErr := <-errChan; dlErr != nil {
-		return fmt.Errorf("download failed: %w", dlErr)
-	}
-
-	slog.Info("pg_download_completed_successfully", "output", cfg.OutputFile)
-	return nil
-}
-
 func init() {
 	pgCmd.AddCommand(pgRestoreCmd)
 	pgRestoreCmd.Flags().String("backup-file", "", "Remote path of the backup file in cloud storage (ENV: BACKUP_FILE)")
 	pgRestoreCmd.Flags().String("restore-to", "", "Target database name for pg_restore (ENV: RESTORE_TO)")
-	pgRestoreCmd.Flags().Bool("download-only", false, "Download and decrypt to a local file instead of running pg_restore")
-	pgRestoreCmd.Flags().String("output", "", "Local output file path when using --download-only (ENV: OUTPUT)")
 
 }
