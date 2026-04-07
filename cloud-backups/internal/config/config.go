@@ -43,6 +43,14 @@ type AppConfig struct {
 	BackupFile          string        `mapstructure:"backup-file"`
 	RestoreTo           string        `mapstructure:"restore-to"`
 	OutputFile          string        `mapstructure:"output"`
+
+	// Rolling restore fields
+	RestoreNamespace string
+	RestoreRepos     []string
+	Months           int
+	CutoffDate       time.Time
+	FromDate         time.Time
+	ToDate           time.Time
 }
 
 // StorageConfig projects the storage-related fields into the storage.Config struct.
@@ -102,6 +110,33 @@ func (c *AppConfig) ValidateRestore() error {
 	return nil
 }
 
+// ValidateRollingRestore checks all fields required for the oci restore-rolling command.
+func (c *AppConfig) ValidateRollingRestore() error {
+	if err := c.validateOCICommon(); err != nil {
+		return err
+	}
+	if c.RestoreNamespace == "" {
+		return fmt.Errorf("--restore-namespace / RESTORE_NAMESPACE is required")
+	}
+	if len(c.RestoreRepos) == 0 {
+		return fmt.Errorf("--repos must contain at least one repo name")
+	}
+	rangeSet := !c.FromDate.IsZero() || !c.ToDate.IsZero()
+	monthsSet := c.Months > 0 || !c.CutoffDate.IsZero()
+	if rangeSet && monthsSet {
+		return fmt.Errorf("--from/--to and --months/--cutoff-date are mutually exclusive")
+	}
+	if rangeSet {
+		if c.FromDate.IsZero() || c.ToDate.IsZero() {
+			return fmt.Errorf("--from and --to must both be provided together")
+		}
+		if c.ToDate.Before(c.FromDate) {
+			return fmt.Errorf("--to must be on or after --from")
+		}
+	}
+	return nil
+}
+
 // ValidatePGBackup checks all fields required for the PG backup command.
 func (c *AppConfig) ValidatePGBackup() error {
 	if err := c.validatePGCommon(); err != nil {
@@ -124,6 +159,9 @@ func (c *AppConfig) ValidatePGRestore(downloadOnly bool) error {
 			return fmt.Errorf("--output is required when --download-only is set")
 		}
 		return c.validateStorage()
+	}
+	if c.RestoreTo == "" {
+		return fmt.Errorf("--restore-to / RESTORE_TO is required")
 	}
 	if _, err := exec.LookPath("pg_restore"); err != nil {
 		return fmt.Errorf("pg_restore not found in PATH: %w", err)

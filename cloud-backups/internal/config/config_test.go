@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 func TestCleanBasePaths(t *testing.T) {
@@ -275,9 +276,7 @@ func TestValidatePGRestore_DownloadOnly_MissingOutput(t *testing.T) {
 func TestValidatePGRestore_MissingRestoreTo(t *testing.T) {
 	c := validPGRestoreConfig()
 	c.RestoreTo = ""
-	// pg_restore may not be in PATH in CI; we expect an error about restore-to OR pg_restore binary
-	err := c.ValidatePGRestore(false)
-	if err == nil {
+	if err := c.ValidatePGRestore(false); err == nil {
 		t.Fatal("expected error for missing restore-to")
 	}
 }
@@ -307,5 +306,110 @@ func TestValidatePGRestore_MissingUser(t *testing.T) {
 	err := c.ValidatePGRestore(false)
 	if err == nil {
 		t.Fatal("expected error for missing pg-user")
+	}
+}
+
+// --- ValidateRollingRestore ---
+
+func validRollingRestoreConfig() *AppConfig {
+	c := validS3Config()
+	c.RegistryHost = "registry.example.com"
+	c.RegistryUsername = "user"
+	c.RegistryToken = "tok"
+	c.RestoreNamespace = "my-namespace"
+	c.RestoreRepos = []string{"repo-a", "repo-b"}
+	return c
+}
+
+func TestValidateRollingRestore_Valid_ModeA_Default(t *testing.T) {
+	c := validRollingRestoreConfig()
+	if err := c.ValidateRollingRestore(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRollingRestore_Valid_ModeA_Explicit(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.Months = 3
+	if err := c.ValidateRollingRestore(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRollingRestore_Valid_ModeB(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.FromDate = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.ToDate = time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	if err := c.ValidateRollingRestore(); err != nil {
+		t.Fatalf("unexpected error for valid Mode B: %v", err)
+	}
+}
+
+func TestValidateRollingRestore_MissingRepos(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.RestoreRepos = nil
+	if err := c.ValidateRollingRestore(); err == nil {
+		t.Fatal("expected error for missing repos")
+	}
+}
+
+func TestValidateRollingRestore_MutuallyExclusive(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.FromDate = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.ToDate = time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	c.Months = 3
+	if err := c.ValidateRollingRestore(); err == nil {
+		t.Fatal("expected error for mutually exclusive flags")
+	}
+}
+
+func TestValidateRollingRestore_MutuallyExclusive_CutoffDate(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.FromDate = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.ToDate = time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	c.CutoffDate = time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	if err := c.ValidateRollingRestore(); err == nil {
+		t.Fatal("expected error for mutually exclusive flags (cutoff-date)")
+	}
+}
+
+func TestValidateRollingRestore_PartialRange_MissingTo(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.FromDate = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := c.ValidateRollingRestore(); err == nil {
+		t.Fatal("expected error for missing --to")
+	}
+}
+
+func TestValidateRollingRestore_PartialRange_MissingFrom(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.ToDate = time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	if err := c.ValidateRollingRestore(); err == nil {
+		t.Fatal("expected error for missing --from")
+	}
+}
+
+func TestValidateRollingRestore_ToBeforeFrom(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.FromDate = time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	c.ToDate = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := c.ValidateRollingRestore(); err == nil {
+		t.Fatal("expected error for --to before --from")
+	}
+}
+
+func TestValidateRollingRestore_MissingRegistryHost(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.RegistryHost = ""
+	if err := c.ValidateRollingRestore(); err == nil {
+		t.Fatal("expected error for missing registry host")
+	}
+}
+
+func TestValidateRollingRestore_MissingRestoreNamespace(t *testing.T) {
+	c := validRollingRestoreConfig()
+	c.RestoreNamespace = ""
+	if err := c.ValidateRollingRestore(); err == nil {
+		t.Fatal("expected error for missing restore namespace")
 	}
 }

@@ -5,10 +5,11 @@ A unified backup tool that streams OCI registry artifacts and PostgreSQL databas
 ## Commands
 
 ```
-cloud-backup oci backup    # Stream OCI artifacts to cloud storage
-cloud-backup oci restore   # Restore OCI artifacts from cloud storage to a registry
-cloud-backup pg backup     # Stream a PostgreSQL pg_dump to cloud storage
-cloud-backup pg restore    # Restore a PostgreSQL backup from cloud storage
+cloud-backup oci backup          # Stream OCI artifacts to cloud storage
+cloud-backup oci restore         # Restore a single OCI backup from cloud storage to a registry
+cloud-backup oci restore-rolling # Restore the most recent backup per repo/month in a rolling window
+cloud-backup pg backup           # Stream a PostgreSQL pg_dump to cloud storage
+cloud-backup pg restore          # Restore a PostgreSQL backup from cloud storage
 ```
 
 ## Shared flags (all subcommands)
@@ -24,7 +25,7 @@ cloud-backup pg restore    # Restore a PostgreSQL backup from cloud storage
 
 ## OCI — `cloud-backup oci`
 
-Streams OCI artifact tarballs from a registry to cloud storage using `oras`. Output format: `{prefix}-{safe-source-path}-{YYYY-MM-DD-HH-mm-SS}-{random}.tar.gz[.age]` where `{safe-source-path}` is the source registry path with `/` replaced by `-`.
+Streams OCI artifact tarballs from a registry to cloud storage using `oras`. Output uses **deterministic naming**: the last path segment of each repository becomes the filename. Output format: `{repo-name}.tar.gz[.age]`. Re-running a backup overwrites the previous file. With `--append-rolling-months` the suffix `-{YYYY-MM}` is appended before the extension, yielding `{repo-name}-{YYYY-MM}.tar.gz[.age]`.
 
 ### OCI flags
 
@@ -33,7 +34,8 @@ Streams OCI artifact tarballs from a registry to cloud storage using `oras`. Out
 | `--registry-host` | `REGISTRY_HOST` | Target OCI registry domain | *(required)* |
 | `--registry-username` | `REGISTRY_USERNAME` | Registry authentication username | *(required)* |
 | `--registry-token` | `REGISTRY_TOKEN` | Registry authentication token/password | *(required)* |
-| `--max-concurrent-jobs` | `MAX_CONCURRENT_JOBS` | Simultaneous backup streams | `3` |
+| `--max-concurrent-jobs` | `MAX_CONCURRENT_JOBS` | Simultaneous streams | `3` |
+| `--plain-http` | `PLAIN_HTTP` | Use plain HTTP instead of HTTPS for the registry | `false` |
 
 ### `oci backup` flags
 
@@ -48,6 +50,24 @@ Streams OCI artifact tarballs from a registry to cloud storage using `oras`. Out
 | --- | --- | --- |
 | `--backup-file` | `BACKUP_FILE` | Remote filename of the backup file in cloud storage |
 | `--restore-to` | `RESTORE_TO` | Full target repository path in the registry: `namespace/repo` — must include the repo name, not just the namespace |
+
+### `oci restore-rolling` flags
+
+Restores a matrix of `repo × month` backups in one shot. Two mutually exclusive modes:
+
+- **Mode A** (default): last N months ending at an optional anchor date. Expects backup files named `{repo}-{YYYY-MM}.tar.gz[.age]` in the configured storage bucket.
+- **Mode B**: explicit inclusive date range `--from` / `--to`.
+
+| Flag | Env Variable | Description | Default |
+| --- | --- | --- | --- |
+| `--restore-namespace` | `RESTORE_NAMESPACE` | Registry namespace to restore into | *(required)* |
+| `--repos` | `REPOS` | Comma-separated repo names (without namespace) | *(required)* |
+| `--months` | — | **Mode A**: number of recent months to restore | `2` |
+| `--cutoff-date` | `CUTOFF_DATE` | **Mode A**: anchor date `YYYY-MM-DD`; defaults to today | today |
+| `--from` | `FROM` | **Mode B**: start of date range `YYYY-MM-DD` | — |
+| `--to` | `TO` | **Mode B**: end of date range `YYYY-MM-DD` | — |
+
+> `--from`/`--to` and `--months`/`--cutoff-date` are mutually exclusive.
 
 ### OCI examples
 
@@ -73,12 +93,12 @@ cloud-backup oci backup \
   --registry-base-paths "namespace/artifacts" \
   --append-rolling-months
 # Produces files like:
-#   backup-namespace-artifacts-2026-04-2026-04-03-03-00-00-abc123.tar.gz
-#   backup-namespace-artifacts-2026-03-2026-04-03-03-00-00-def456.tar.gz
+#   artifacts-2026-04.tar.gz
+#   artifacts-2026-03.tar.gz
 
 # Restore to a different namespace (same repo name)
 # List backup files first:
-#   aws s3 ls s3://my-backup-bucket/ | grep "backup-namespace"
+#   aws s3 ls s3://my-backup-bucket/
 cloud-backup oci restore \
   --registry-host registry.example.com \
   --registry-username "$NEW_USERNAME" \
@@ -86,8 +106,47 @@ cloud-backup oci restore \
   --backup-storage-type s3 \
   --aws-bucket my-backup-bucket --aws-region us-east-1 \
   --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
-  --backup-file "backup-namespace-repo1-2026-04-2026-04-03-03-00-00-abc123.tar.gz" \
+  --backup-file "repo1.tar.gz" \
   --restore-to new-namespace/repo1
+```
+
+```bash
+# restore-rolling — Mode A: last 2 months (default), repos in my-namespace
+cloud-backup oci restore-rolling \
+  --registry-host registry.example.com \
+  --registry-username admin \
+  --registry-token "$TOKEN" \
+  --backup-storage-type s3 \
+  --aws-bucket my-backup-bucket --aws-region us-east-1 \
+  --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
+  --restore-namespace my-namespace \
+  --repos "rebom-artifacts,downloadable-artifacts"
+# Fetches: rebom-artifacts-2026-03.tar.gz, rebom-artifacts-2026-04.tar.gz
+#          downloadable-artifacts-2026-03.tar.gz, downloadable-artifacts-2026-04.tar.gz
+
+# restore-rolling — Mode A: last 3 months ending at a specific date
+cloud-backup oci restore-rolling \
+  --registry-host registry.example.com \
+  --registry-username admin --registry-token "$TOKEN" \
+  --backup-storage-type s3 \
+  --aws-bucket my-backup-bucket --aws-region us-east-1 \
+  --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
+  --restore-namespace my-namespace \
+  --repos "rebom-artifacts" \
+  --months 3 --cutoff-date 2026-03-01
+# Restores: rebom-artifacts-2026-01.tar.gz, rebom-artifacts-2026-02.tar.gz, rebom-artifacts-2026-03.tar.gz
+
+# restore-rolling — Mode B: explicit range
+cloud-backup oci restore-rolling \
+  --registry-host registry.example.com \
+  --registry-username admin --registry-token "$TOKEN" \
+  --backup-storage-type s3 \
+  --aws-bucket my-backup-bucket --aws-region us-east-1 \
+  --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
+  --restore-namespace my-namespace \
+  --repos "rebom-artifacts,downloadable-artifacts" \
+  --from 2025-11-01 --to 2026-01-31
+# Restores Nov-2025, Dec-2025, Jan-2026 for each repo
 ```
 
 ### OCI manual restore

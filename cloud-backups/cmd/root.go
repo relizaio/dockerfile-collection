@@ -28,6 +28,26 @@ func mustGetString(cmd *cobra.Command, name string) string {
 	return os.Getenv(envKey)
 }
 
+// mustGetStringSlice reads a local Cobra StringSlice flag, falling back to the corresponding
+// environment variable (comma-separated) when the flag was not explicitly set.
+func mustGetStringSlice(cmd *cobra.Command, name string) []string {
+	if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+		val, _ := cmd.Flags().GetStringSlice(name)
+		return val
+	}
+	envKey := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	if raw := os.Getenv(envKey); raw != "" {
+		var result []string
+		for _, part := range strings.Split(raw, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
