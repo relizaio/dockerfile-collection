@@ -1,0 +1,16 @@
+# Copyright Reliza Incorporated. 2019 - 2025. Licensed under the terms of MIT.
+# SPDX-License-Identifier: MIT
+
+services:
+  postgresql:
+    image: registry.relizahub.com/library/postgresql:17
+    ports:
+      - '5432:5432'
+    volumes:
+      - 'postgresql_data:/relizaio/postgresql'
+    environment:
+      - 'ALLOW_EMPTY_PASSWORD=yes'
+
+volumes:
+  postgresql_data:
+    driver: local
