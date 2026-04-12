@@ -25,7 +25,7 @@ jobs:
           rearm_api_id: ${{ secrets.REARM_MAIN_REARM_POSTGRES_API_ID }}
           rearm_api_key: ${{ secrets.REARM_MAIN_REARM_POSTGRES_API_KEY }}
           rearm_api_url: https://reliza.rearmhq.com
-          path: postgresql-17/debian-13
+          path: postgresql-17/ubuntu-24.04
           rearm_mirror_api_id: ${{ secrets.REARM_REARM_POSTGRES_API_ID }}
           rearm_mirror_api_key: ${{ secrets.REARM_REARM_POSTGRES_API_KEY }}
           rearm_mirror_api_url: https://demo.rearmhq.com
