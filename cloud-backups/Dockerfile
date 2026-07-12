@@ -1,5 +1,5 @@
-FROM alpine:3.23.4@sha256:4d889c14e7d5a73929ab00be2ef8ff22437e7cbc545931e52554a7b00e123d8b AS oras-builder
-ENV ORAS_VERSION="1.3.2"
+FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS oras-builder
+ENV ORAS_VERSION="1.3.3"
 WORKDIR /tools
 COPY tools.sha256.sum .
 
@@ -9,7 +9,7 @@ RUN apk add --no-cache curl && \
     && mkdir -p oras-install/ \
     && tar -zxf oras_${ORAS_VERSION}_*.tar.gz -C oras-install/
 
-FROM golang:1.26.3-alpine3.23@sha256:f44b851aa23dfa219d18db6eab743203245429d355cb619cf96a2ffe2a84ba7a AS go-builder
+FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS go-builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
@@ -17,7 +17,7 @@ COPY . ./
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o cloud-backup .
 
-FROM alpine:3.23.4@sha256:4d889c14e7d5a73929ab00be2ef8ff22437e7cbc545931e52554a7b00e123d8b AS deliverable
+FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS deliverable
 
 RUN apk add --no-cache ca-certificates tzdata postgresql17-client \
     && adduser -u 1000 -D apprunner
