@@ -29,6 +29,7 @@ func (t *Tracker) RecordJob()             { t.mu.Lock(); defer t.mu.Unlock(); t.
 func (t *Tracker) RecordSuccess()         { t.mu.Lock(); defer t.mu.Unlock(); t.Success++ }
 func (t *Tracker) AddBytes(b int64)       { t.mu.Lock(); defer t.mu.Unlock(); t.TotalBytes += b }
 func (t *Tracker) GetTotal() int64        { t.mu.Lock(); defer t.mu.Unlock(); return t.Total }
+func (t *Tracker) GetSuccess() int64      { t.mu.Lock(); defer t.mu.Unlock(); return t.Success }
 func (t *Tracker) GetFailedCount() int64  { t.mu.Lock(); defer t.mu.Unlock(); return t.FailureCount }
 func (t *Tracker) GetSkippedCount() int64 { t.mu.Lock(); defer t.mu.Unlock(); return t.SkippedCount }
 

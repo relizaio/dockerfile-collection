@@ -3,11 +3,21 @@ package config
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/relizaio/cloud-backup/internal/storage"
 )
+
+// sqlIdent matches a safe unquoted SQL identifier (schema / table name). The
+// audit-rotate mode interpolates these into DDL, so they must be validated to
+// prevent injection and malformed statements.
+var sqlIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// pgDuration matches a PostgreSQL lock_timeout value (e.g. "5s", "500ms", "0",
+// "2min"). It is interpolated into a SET statement, so it must be a safe token.
+var pgDuration = regexp.MustCompile(`^[0-9]+\s?(us|ms|s|min|h|d)?$`)
 
 // AppConfig is a strongly-typed, viper-agnostic representation of all CLI/env configuration.
 type AppConfig struct {
@@ -25,6 +35,13 @@ type AppConfig struct {
 	PGPort     string `mapstructure:"pg-port"`
 	PGDatabase string `mapstructure:"pg-database"`
 	PGUser     string `mapstructure:"pg-user"`
+
+	// PG audit-rotate fields
+	PGSchema         string `mapstructure:"pg-schema"`
+	AuditTable       string `mapstructure:"audit-table"`
+	KeepTailDays     int    `mapstructure:"keep-tail-days"`
+	LockTimeout      string `mapstructure:"lock-timeout"`
+	AllowUnencrypted bool   `mapstructure:"allow-unencrypted"`
 
 	// Shared fields
 	StorageType         string        `mapstructure:"backup-storage-type"`
@@ -144,6 +161,43 @@ func (c *AppConfig) ValidatePGBackup() error {
 	}
 	if _, err := exec.LookPath("pg_dump"); err != nil {
 		return fmt.Errorf("pg_dump not found in PATH: %w", err)
+	}
+	return c.validateStorage()
+}
+
+// ValidatePGAuditRotate checks all fields required for the pg audit-rotate command.
+func (c *AppConfig) ValidatePGAuditRotate() error {
+	if _, err := exec.LookPath("psql"); err != nil {
+		return fmt.Errorf("psql not found in PATH: %w", err)
+	}
+	if _, err := exec.LookPath("pg_dump"); err != nil {
+		return fmt.Errorf("pg_dump not found in PATH: %w", err)
+	}
+	if err := c.validatePGCommon(); err != nil {
+		return err
+	}
+	if !sqlIdent.MatchString(c.PGSchema) {
+		return fmt.Errorf("--pg-schema / PG_SCHEMA must be a valid SQL identifier, got %q", c.PGSchema)
+	}
+	if !sqlIdent.MatchString(c.AuditTable) {
+		return fmt.Errorf("--audit-table / AUDIT_TABLE must be a valid SQL identifier, got %q", c.AuditTable)
+	}
+	// The archive name is "<audit>_archive_<16-char utc>_<8 hex>" = <audit>+34 chars.
+	// Postgres truncates identifiers at 63 bytes; truncation would desync the Go name
+	// from the stored name and wedge keep-copy/drop/recovery. Bound the input.
+	if len(c.AuditTable) > 63-34 {
+		return fmt.Errorf("--audit-table / AUDIT_TABLE too long (%d chars); max 29 so the archive name stays within Postgres's 63-byte identifier limit", len(c.AuditTable))
+	}
+	if c.KeepTailDays < 0 {
+		return fmt.Errorf("--keep-tail-days / KEEP_TAIL_DAYS must be >= 0, got %d", c.KeepTailDays)
+	}
+	if !pgDuration.MatchString(c.LockTimeout) {
+		return fmt.Errorf("--lock-timeout / LOCK_TIMEOUT must be a PostgreSQL duration like 5s or 500ms, got %q", c.LockTimeout)
+	}
+	// The archive is written to a permanent-retention bucket where it cannot be
+	// deleted; refuse to write it in plaintext unless explicitly allowed.
+	if c.EncryptionPassword == "" && !c.AllowUnencrypted {
+		return fmt.Errorf("audit data would be written UNENCRYPTED to a permanent bucket; set --encryption-password / ENCRYPTION_PASSWORD, or pass --allow-unencrypted / ALLOW_UNENCRYPTED=true to opt in")
 	}
 	return c.validateStorage()
 }

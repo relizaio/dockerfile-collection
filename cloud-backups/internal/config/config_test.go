@@ -443,3 +443,44 @@ func TestValidateRollingRestore_MissingRestoreNamespace(t *testing.T) {
 		t.Fatal("expected error for missing restore namespace")
 	}
 }
+
+func TestValidatePGAuditRotate(t *testing.T) {
+	base := func() *AppConfig {
+		return &AppConfig{
+			PGHost: "h", PGDatabase: "d", PGUser: "u",
+			PGSchema: "rearm", AuditTable: "audit", KeepTailDays: 0, LockTimeout: "5s",
+			EncryptionPassword: "pw",
+			StorageType:        "s3", AWSBucket: "b", AWSRegion: "r",
+			AWSAccessKeyID: "k", AWSSecretAccessKey: "s",
+		}
+	}
+	if err := base().ValidatePGAuditRotate(); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+	// no encryption password + not explicitly allowed -> rejected
+	if err := (func() *AppConfig { c := base(); c.EncryptionPassword = ""; return c })().ValidatePGAuditRotate(); err == nil {
+		t.Error("expected rejection when unencrypted and not allowed")
+	}
+	// no encryption password but explicitly allowed -> accepted
+	if err := (func() *AppConfig { c := base(); c.EncryptionPassword = ""; c.AllowUnencrypted = true; return c })().ValidatePGAuditRotate(); err != nil {
+		t.Errorf("explicit --allow-unencrypted should pass: %v", err)
+	}
+	bad := map[string]func(*AppConfig){
+		"bad schema":   func(c *AppConfig) { c.PGSchema = "rea rm" },
+		"bad table":    func(c *AppConfig) { c.AuditTable = "audit;drop" },
+		"long table":   func(c *AppConfig) { c.AuditTable = "a_very_long_audit_table_name_wont_fit" },
+		"neg tail":     func(c *AppConfig) { c.KeepTailDays = -1 },
+		"empty lock":   func(c *AppConfig) { c.LockTimeout = "" },
+		"missing db":   func(c *AppConfig) { c.PGDatabase = "" },
+		"missing buck": func(c *AppConfig) { c.AWSBucket = "" },
+	}
+	for name, mut := range bad {
+		t.Run(name, func(t *testing.T) {
+			c := base()
+			mut(c)
+			if err := c.ValidatePGAuditRotate(); err == nil {
+				t.Errorf("%s: expected validation error, got nil", name)
+			}
+		})
+	}
+}
