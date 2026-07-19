@@ -12,6 +12,7 @@ cloud-backup oci download        # Download and decrypt an OCI backup archive to
 cloud-backup pg backup           # Stream a PostgreSQL pg_dump to cloud storage
 cloud-backup pg restore          # Restore a PostgreSQL backup from cloud storage
 cloud-backup pg download         # Download and decrypt a PostgreSQL backup file to a local file
+cloud-backup pg audit-rotate     # Rotate a write-only audit table: archive + drop old rows to reclaim disk
 ```
 
 ## Shared flags (all subcommands)
@@ -231,6 +232,36 @@ cloud-backup pg restore \
   --backup-file "prod-mydb-2025-01-15-03-00-00-abc123.dump" \
   --restore-to mydb_restored
 
+```
+
+### `pg audit-rotate` flags
+
+Relieves disk pressure from a large, **write-only** audit table (per-entity revision snapshots) without a partitioning migration or any application change. Each run renames the live table aside, stands up a fresh identical table that immediately receives new writes (carrying forward only the rows that are read), streams the rotated-out archive to storage, and only then `DROP`s it (instant reclaim).
+
+Design notes:
+- The rename holds an `ACCESS EXCLUSIVE` lock only for a catalog-only operation (sub-second even on large tables). `--lock-timeout` makes it **fail-safe**: on contention the rotate rolls back untouched and retries next run.
+- The `DROP` is the sole irreversible step and runs **only after a verified upload**. An interrupted run leaves the archive in place; the next run finishes it (backs up + drops) before rotating again.
+- Object names are deterministic per archive (`{prefix}-{archive}.dump[.age]`, where `{archive}` carries a unique UTC timestamp): distinct and never overwritten across rotations, while a retry or recovery of the *same* archive reuses the key instead of accumulating duplicates. Point this at a **separate, permanent-retention bucket**, not the expiring DB-backup bucket.
+- Runs as the same DB role the application uses, so the fresh table is owned by (and writable by) the app.
+
+| Flag | Env Variable | Description | Default |
+| --- | --- | --- | --- |
+| `--pg-schema` | `PG_SCHEMA` | Schema containing the audit table | `rearm` |
+| `--audit-table` | `AUDIT_TABLE` | Audit table name | `audit` |
+| `--keep-tail-days` | `KEEP_TAIL_DAYS` | Also keep audit rows newer than N days in the live table (0 = keep only the read set) | `0` |
+| `--lock-timeout` | `LOCK_TIMEOUT` | `lock_timeout` for the rename; on contention the rotate rolls back and retries next run | `5s` |
+
+Shares the `pg` connection flags above and the storage/`--dump-prefix`/`--encryption-password` flags. `PGPASSWORD` must be set in the environment; the role needs write + DDL on the audit table.
+
+```bash
+export PGPASSWORD="secret"
+cloud-backup pg audit-rotate \
+  --pg-host my-postgres-host --pg-database mydb --pg-user myuser \
+  --pg-schema rearm --audit-table audit --keep-tail-days 0 \
+  --backup-storage-type s3 \
+  --aws-bucket my-PERMANENT-audit-bucket --aws-region us-east-1 \
+  --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
+  --dump-prefix "prod-mydb-audit"
 ```
 
 ### `pg download` flags

@@ -443,3 +443,34 @@ func TestValidateRollingRestore_MissingRestoreNamespace(t *testing.T) {
 		t.Fatal("expected error for missing restore namespace")
 	}
 }
+
+func TestValidatePGAuditRotate(t *testing.T) {
+	base := func() *AppConfig {
+		return &AppConfig{
+			PGHost: "h", PGDatabase: "d", PGUser: "u",
+			PGSchema: "rearm", AuditTable: "audit", KeepTailDays: 0, LockTimeout: "5s",
+			StorageType: "s3", AWSBucket: "b", AWSRegion: "r",
+			AWSAccessKeyID: "k", AWSSecretAccessKey: "s",
+		}
+	}
+	if err := base().ValidatePGAuditRotate(); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+	bad := map[string]func(*AppConfig){
+		"bad schema":   func(c *AppConfig) { c.PGSchema = "rea rm" },
+		"bad table":    func(c *AppConfig) { c.AuditTable = "audit;drop" },
+		"neg tail":     func(c *AppConfig) { c.KeepTailDays = -1 },
+		"empty lock":   func(c *AppConfig) { c.LockTimeout = "" },
+		"missing db":   func(c *AppConfig) { c.PGDatabase = "" },
+		"missing buck": func(c *AppConfig) { c.AWSBucket = "" },
+	}
+	for name, mut := range bad {
+		t.Run(name, func(t *testing.T) {
+			c := base()
+			mut(c)
+			if err := c.ValidatePGAuditRotate(); err == nil {
+				t.Errorf("%s: expected validation error, got nil", name)
+			}
+		})
+	}
+}

@@ -3,11 +3,21 @@ package config
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/relizaio/cloud-backup/internal/storage"
 )
+
+// sqlIdent matches a safe unquoted SQL identifier (schema / table name). The
+// audit-rotate mode interpolates these into DDL, so they must be validated to
+// prevent injection and malformed statements.
+var sqlIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// pgDuration matches a PostgreSQL lock_timeout value (e.g. "5s", "500ms", "0",
+// "2min"). It is interpolated into a SET statement, so it must be a safe token.
+var pgDuration = regexp.MustCompile(`^[0-9]+\s?(us|ms|s|min|h|d)?$`)
 
 // AppConfig is a strongly-typed, viper-agnostic representation of all CLI/env configuration.
 type AppConfig struct {
@@ -25,6 +35,12 @@ type AppConfig struct {
 	PGPort     string `mapstructure:"pg-port"`
 	PGDatabase string `mapstructure:"pg-database"`
 	PGUser     string `mapstructure:"pg-user"`
+
+	// PG audit-rotate fields
+	PGSchema     string `mapstructure:"pg-schema"`
+	AuditTable   string `mapstructure:"audit-table"`
+	KeepTailDays int    `mapstructure:"keep-tail-days"`
+	LockTimeout  string `mapstructure:"lock-timeout"`
 
 	// Shared fields
 	StorageType         string        `mapstructure:"backup-storage-type"`
@@ -144,6 +160,32 @@ func (c *AppConfig) ValidatePGBackup() error {
 	}
 	if _, err := exec.LookPath("pg_dump"); err != nil {
 		return fmt.Errorf("pg_dump not found in PATH: %w", err)
+	}
+	return c.validateStorage()
+}
+
+// ValidatePGAuditRotate checks all fields required for the pg audit-rotate command.
+func (c *AppConfig) ValidatePGAuditRotate() error {
+	if _, err := exec.LookPath("psql"); err != nil {
+		return fmt.Errorf("psql not found in PATH: %w", err)
+	}
+	if _, err := exec.LookPath("pg_dump"); err != nil {
+		return fmt.Errorf("pg_dump not found in PATH: %w", err)
+	}
+	if err := c.validatePGCommon(); err != nil {
+		return err
+	}
+	if !sqlIdent.MatchString(c.PGSchema) {
+		return fmt.Errorf("--pg-schema / PG_SCHEMA must be a valid SQL identifier, got %q", c.PGSchema)
+	}
+	if !sqlIdent.MatchString(c.AuditTable) {
+		return fmt.Errorf("--audit-table / AUDIT_TABLE must be a valid SQL identifier, got %q", c.AuditTable)
+	}
+	if c.KeepTailDays < 0 {
+		return fmt.Errorf("--keep-tail-days / KEEP_TAIL_DAYS must be >= 0, got %d", c.KeepTailDays)
+	}
+	if !pgDuration.MatchString(c.LockTimeout) {
+		return fmt.Errorf("--lock-timeout / LOCK_TIMEOUT must be a PostgreSQL duration like 5s or 500ms, got %q", c.LockTimeout)
 	}
 	return c.validateStorage()
 }
