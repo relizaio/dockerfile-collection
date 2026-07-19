@@ -37,10 +37,11 @@ type AppConfig struct {
 	PGUser     string `mapstructure:"pg-user"`
 
 	// PG audit-rotate fields
-	PGSchema     string `mapstructure:"pg-schema"`
-	AuditTable   string `mapstructure:"audit-table"`
-	KeepTailDays int    `mapstructure:"keep-tail-days"`
-	LockTimeout  string `mapstructure:"lock-timeout"`
+	PGSchema         string `mapstructure:"pg-schema"`
+	AuditTable       string `mapstructure:"audit-table"`
+	KeepTailDays     int    `mapstructure:"keep-tail-days"`
+	LockTimeout      string `mapstructure:"lock-timeout"`
+	AllowUnencrypted bool   `mapstructure:"allow-unencrypted"`
 
 	// Shared fields
 	StorageType         string        `mapstructure:"backup-storage-type"`
@@ -186,6 +187,11 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 	}
 	if !pgDuration.MatchString(c.LockTimeout) {
 		return fmt.Errorf("--lock-timeout / LOCK_TIMEOUT must be a PostgreSQL duration like 5s or 500ms, got %q", c.LockTimeout)
+	}
+	// The archive is written to a permanent-retention bucket where it cannot be
+	// deleted; refuse to write it in plaintext unless explicitly allowed.
+	if c.EncryptionPassword == "" && !c.AllowUnencrypted {
+		return fmt.Errorf("audit data would be written UNENCRYPTED to a permanent bucket; set --encryption-password / ENCRYPTION_PASSWORD, or pass --allow-unencrypted / ALLOW_UNENCRYPTED=true to opt in")
 	}
 	return c.validateStorage()
 }

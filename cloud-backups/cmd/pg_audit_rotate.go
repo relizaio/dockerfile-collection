@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
@@ -64,6 +66,7 @@ func runPGAuditRotate() error {
 		AuditTable:          viper.GetString("audit-table"),
 		KeepTailDays:        viper.GetInt("keep-tail-days"),
 		LockTimeout:         viper.GetString("lock-timeout"),
+		AllowUnencrypted:    viper.GetBool("allow-unencrypted"),
 		StorageType:         viper.GetString("backup-storage-type"),
 		EncryptionPassword:  viper.GetString("encryption-password"),
 		DumpPrefix:          viper.GetString("dump-prefix"),
@@ -111,6 +114,18 @@ func runPGAuditRotate() error {
 		return err
 	}
 
+	// This mode assumes a client-generated PK (e.g. UUID). A serial/identity column
+	// would have an owned sequence that CREATE ... LIKE shares and DROP later kills,
+	// wedging app inserts -- so refuse rather than risk it.
+	if seqCols, err := pgClient.QueryRows(ctx, assertNoOwnedSequenceSQL(cfg.PGSchema, cfg.AuditTable)); err != nil {
+		slog.Error("owned_sequence_precheck_failed", "error", err.Error())
+		return err
+	} else if len(seqCols) > 0 {
+		err := fmt.Errorf("audit table %s.%s has a serial/identity column (%s); audit-rotate requires a client-generated (e.g. UUID) primary key", cfg.PGSchema, cfg.AuditTable, strings.Join(seqCols, ","))
+		slog.Error("unsupported_audit_table", "error", err.Error())
+		return err
+	}
+
 	start := time.Now()
 	tracker := stats.New()
 
@@ -132,7 +147,10 @@ func runPGAuditRotate() error {
 	// 2. Rotate: rename the live table aside and stand up a fresh one (fail-safe on
 	//    lock contention). The read set is carried forward inside backupAndDropArchive
 	//    (step 3), so it also runs on the recovery path above.
-	archive := fmt.Sprintf("%s_archive_%s", cfg.AuditTable, time.Now().UTC().Format("20060102t150405z"))
+	archive, err := newArchiveName(cfg.AuditTable, time.Now())
+	if err != nil {
+		return err
+	}
 	slog.Info("rotating_audit_table", "schema", cfg.PGSchema, "table", cfg.AuditTable, "archive", archive)
 	if err := pgClient.Exec(ctx, rotateSQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.LockTimeout)); err != nil {
 		slog.Error("rotate_failed_will_retry_next_run", "error", err.Error())
@@ -163,8 +181,17 @@ func backupAndDropArchive(ctx context.Context, pgClient *pg.Client, store storag
 	// archive into the live table before we drop it. Idempotent (ON CONFLICT DO
 	// NOTHING) and safe to run on both the normal and recovery paths, so a
 	// keep-copy that failed on a prior run is repaired here rather than stranding
-	// readable rows in an about-to-be-dropped archive.
-	if err := pgClient.Exec(ctx, keepCopySQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.KeepTailDays)); err != nil {
+	// readable rows in an about-to-be-dropped archive. Columns are enumerated by
+	// NAME (not SELECT *) so a schema change to the live table between a failed run
+	// and its recovery copies the shared columns instead of wedging or corrupting.
+	cols, err := pgClient.QueryRows(ctx, sharedColumnsSQL(cfg.PGSchema, cfg.AuditTable, archive))
+	if err != nil {
+		return fmt.Errorf("resolving shared columns for %s: %w", fqTable, err)
+	}
+	if len(cols) == 0 {
+		return fmt.Errorf("no shared columns between %s.%s and %s -- refusing keep-copy", cfg.PGSchema, cfg.AuditTable, fqTable)
+	}
+	if err := pgClient.Exec(ctx, keepCopySQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.KeepTailDays, cols)); err != nil {
 		return fmt.Errorf("keep-copy from %s failed: %w", fqTable, err)
 	}
 
@@ -176,10 +203,10 @@ func backupAndDropArchive(ctx context.Context, pgClient *pg.Client, store storag
 	}
 
 	// Dump only this table. The object name is DETERMINISTIC per archive: the
-	// archive name already carries a unique UTC timestamp, so each rotation gets a
-	// distinct, never-overwritten key across runs -- while a retry or a recovery
-	// re-upload of the SAME archive reuses that key instead of littering the
-	// permanent (no-expiry) bucket with truncated/duplicate multi-GB objects.
+	// archive name carries a unique UTC timestamp + random suffix, so each rotation
+	// gets a distinct, never-overwritten key across runs -- while a retry or a
+	// recovery re-upload of the SAME archive reuses that key instead of littering
+	// the permanent (no-expiry) bucket with truncated/duplicate multi-GB objects.
 	dumpClient := &pg.Client{Host: cfg.PGHost, Port: cfg.PGPort, Database: cfg.PGDatabase, User: cfg.PGUser, Table: fqTable}
 	backupName := fmt.Sprintf("%s-%s", cfg.DumpPrefix, archive)
 
@@ -192,21 +219,70 @@ func backupAndDropArchive(ctx context.Context, pgClient *pg.Client, store storag
 	}
 
 	slog.Info("archive_uploaded_dropping", "archive", fqTable)
-	if err := pgClient.Exec(ctx, fmt.Sprintf("DROP TABLE %s.%s;", cfg.PGSchema, archive)); err != nil {
+	if err := pgClient.Exec(ctx, dropArchiveSQL(cfg.PGSchema, archive, cfg.LockTimeout)); err != nil {
+		// Upload succeeded; a drop that lost the lock race just leaves the archive
+		// for next-run recovery (which re-uploads to the same key and retries).
 		return fmt.Errorf("archive uploaded but drop failed for %s: %w", fqTable, err)
 	}
 	return nil
 }
 
-// listArchivesSQL lists archive tables left by prior runs (audit_archive_<stamp>).
-// Underscores in the audit name are escaped so they are matched literally rather
-// than as LIKE single-char wildcards.
+// newArchiveName builds a per-rotation archive table name with a second-resolution
+// UTC timestamp plus a random suffix, so two distinct rotations landing in the same
+// wall-second (rapid manual re-run, or a backward clock step) never collide on the
+// table name or -- since the object key is derived from it -- on the storage object.
+func newArchiveName(audit string, now time.Time) (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating archive suffix: %w", err)
+	}
+	return fmt.Sprintf("%s_archive_%s_%s", audit, now.UTC().Format("20060102t150405z"), hex.EncodeToString(b)), nil
+}
+
+// listArchivesSQL lists archive tables left by prior runs. The match is ANCHORED to
+// the exact generated name shape (<audit>_archive_<utc>[_<hex>]) via a regex, so it
+// cannot pick up an operator's unrelated `<audit>_archive_manual` table (which
+// recovery would otherwise back up and DROP) and cannot be steered by a maliciously
+// named table (the recovered name is interpolated into DDL downstream).
 func listArchivesSQL(schema, audit string) string {
-	escAudit := strings.ReplaceAll(audit, "_", `\_`)
 	return fmt.Sprintf(
-		"SELECT tablename FROM pg_tables WHERE schemaname = '%s' AND tablename LIKE '%s\\_archive\\_%%' ESCAPE '\\' ORDER BY tablename;",
-		schema, escAudit,
+		"SELECT tablename FROM pg_tables WHERE schemaname = '%s' AND tablename ~ '^%s_archive_[0-9]{8}t[0-9]{6}z(_[0-9a-f]+)?$' ORDER BY tablename;",
+		schema, audit,
 	)
+}
+
+// assertNoOwnedSequenceSQL detects a serial/identity surrogate key on the audit
+// table. CREATE TABLE ... LIKE INCLUDING ALL would share/duplicate the owned
+// sequence, and the later DROP of the archive would take it down -- wedging app
+// inserts. This mode assumes a client-generated (e.g. UUID) primary key.
+func assertNoOwnedSequenceSQL(schema, audit string) string {
+	return fmt.Sprintf(
+		"SELECT column_name FROM information_schema.columns WHERE table_schema = '%s' AND table_name = '%s' AND (is_identity = 'YES' OR column_default LIKE 'nextval(%%');",
+		schema, audit,
+	)
+}
+
+// sharedColumnsSQL returns the columns present in BOTH the live audit table and the
+// archive, ordered by the live table's column order, so the keep-copy can name them
+// explicitly and survive a schema change across a failed run + recovery.
+func sharedColumnsSQL(schema, audit, archive string) string {
+	return fmt.Sprintf(`SELECT a.column_name FROM information_schema.columns a
+JOIN information_schema.columns b
+  ON b.table_schema = a.table_schema AND b.table_name = '%[3]s' AND b.column_name = a.column_name
+WHERE a.table_schema = '%[1]s' AND a.table_name = '%[2]s'
+ORDER BY a.ordinal_position;`, schema, audit, archive)
+}
+
+// dropArchiveSQL drops the archive inside a txn bounded by lock_timeout (so a
+// concurrent ACCESS SHARE holder -- e.g. the full-DB backup's pg_dump -- makes the
+// drop fail fast and defer to next-run recovery, not hang) with no statement_timeout.
+func dropArchiveSQL(schema, archive, lockTimeout string) string {
+	return fmt.Sprintf(`BEGIN;
+SET LOCAL lock_timeout = '%[3]s';
+SET LOCAL statement_timeout = 0;
+DROP TABLE %[1]s.%[2]s;
+COMMIT;
+`, schema, archive, lockTimeout)
 }
 
 // rotateSQL renames the live table aside and creates a fresh identical one in a
@@ -238,15 +314,28 @@ COMMIT;
 
 // keepCopySQL carries the read set forward from the now-sealed archive into the
 // fresh table, out of the rotation lock. INSTANCES rows (the only ones read) are
-// always kept; keepTailDays optionally keeps a recent tail of all entities.
-// ON CONFLICT DO NOTHING guards against a rare concurrent re-audit.
-func keepCopySQL(schema, audit, archive string, keepTailDays int) string {
-	return fmt.Sprintf(`INSERT INTO %[1]s.%[2]s
-SELECT * FROM %[1]s.%[3]s
-WHERE entity_name = 'instances'
-   OR revision_created_date >= now() - make_interval(days => %[4]d)
+// always kept; keepTailDays>0 additionally keeps a recent tail of all entities.
+// Columns are named explicitly (survives schema drift; see backupAndDropArchive).
+// With keepTailDays==0 the WHERE is INSTANCES-only so it uses the leading-column
+// index instead of a full seq-scan on the unindexed revision_created_date. A
+// generous statement_timeout=0 prevents a role-level statement_timeout from
+// aborting the copy. ON CONFLICT DO NOTHING guards against a rare concurrent re-audit.
+func keepCopySQL(schema, audit, archive string, keepTailDays int, cols []string) string {
+	quoted := make([]string, len(cols))
+	for i, c := range cols {
+		quoted[i] = `"` + strings.ReplaceAll(c, `"`, `""`) + `"`
+	}
+	colList := strings.Join(quoted, ", ")
+	where := "entity_name = 'instances'"
+	if keepTailDays > 0 {
+		where += fmt.Sprintf("\n   OR revision_created_date >= now() - make_interval(days => %d)", keepTailDays)
+	}
+	return fmt.Sprintf(`SET statement_timeout = 0;
+INSERT INTO %[1]s.%[2]s (%[4]s)
+SELECT %[4]s FROM %[1]s.%[3]s
+WHERE %[5]s
 ON CONFLICT DO NOTHING;
-`, schema, audit, archive, keepTailDays)
+`, schema, audit, archive, colList, where)
 }
 
 func init() {

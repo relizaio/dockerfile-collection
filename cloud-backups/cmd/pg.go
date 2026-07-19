@@ -26,6 +26,7 @@ func init() {
 	pgCmd.PersistentFlags().String("audit-table", "audit", "Audit table name, for audit-rotate (ENV: AUDIT_TABLE)")
 	pgCmd.PersistentFlags().Int("keep-tail-days", 0, "audit-rotate: also keep audit rows newer than N days in the live table (0 = readers only) (ENV: KEEP_TAIL_DAYS)")
 	pgCmd.PersistentFlags().String("lock-timeout", "5s", "audit-rotate: lock_timeout for the rename step; on contention the rotate rolls back and retries next run (ENV: LOCK_TIMEOUT)")
+	pgCmd.PersistentFlags().Bool("allow-unencrypted", false, "audit-rotate: allow writing an UNENCRYPTED dump to the permanent bucket when no --encryption-password is set (ENV: ALLOW_UNENCRYPTED)")
 
 	mustBindPFlag := func(key, flagName string) {
 		if err := viper.BindPFlag(key, pgCmd.PersistentFlags().Lookup(flagName)); err != nil {
@@ -40,4 +41,5 @@ func init() {
 	mustBindPFlag("audit-table", "audit-table")
 	mustBindPFlag("keep-tail-days", "keep-tail-days")
 	mustBindPFlag("lock-timeout", "lock-timeout")
+	mustBindPFlag("allow-unencrypted", "allow-unencrypted")
 }

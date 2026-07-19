@@ -449,12 +449,21 @@ func TestValidatePGAuditRotate(t *testing.T) {
 		return &AppConfig{
 			PGHost: "h", PGDatabase: "d", PGUser: "u",
 			PGSchema: "rearm", AuditTable: "audit", KeepTailDays: 0, LockTimeout: "5s",
-			StorageType: "s3", AWSBucket: "b", AWSRegion: "r",
+			EncryptionPassword: "pw",
+			StorageType:        "s3", AWSBucket: "b", AWSRegion: "r",
 			AWSAccessKeyID: "k", AWSSecretAccessKey: "s",
 		}
 	}
 	if err := base().ValidatePGAuditRotate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
+	}
+	// no encryption password + not explicitly allowed -> rejected
+	if err := (func() *AppConfig { c := base(); c.EncryptionPassword = ""; return c })().ValidatePGAuditRotate(); err == nil {
+		t.Error("expected rejection when unencrypted and not allowed")
+	}
+	// no encryption password but explicitly allowed -> accepted
+	if err := (func() *AppConfig { c := base(); c.EncryptionPassword = ""; c.AllowUnencrypted = true; return c })().ValidatePGAuditRotate(); err != nil {
+		t.Errorf("explicit --allow-unencrypted should pass: %v", err)
 	}
 	bad := map[string]func(*AppConfig){
 		"bad schema":   func(c *AppConfig) { c.PGSchema = "rea rm" },
