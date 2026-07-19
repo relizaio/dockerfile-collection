@@ -240,7 +240,8 @@ Relieves disk pressure from a large, **write-only** audit table (per-entity revi
 
 Design notes:
 - The rename holds an `ACCESS EXCLUSIVE` lock only for a catalog-only operation (sub-second even on large tables). `--lock-timeout` makes it **fail-safe**: on contention the rotate rolls back untouched and retries next run.
-- The `DROP` is the sole irreversible step and runs **only after a verified upload**. An interrupted run leaves the archive in place; the next run finishes it (backs up + drops) before rotating again.
+- The `DROP` is the sole irreversible step and runs **only after a verified upload**. Verification = the upload completed (S3 verifies a SHA-256 of every part server-side and refuses on mismatch) **+** a `HeadObject` size match **+** a whole-object SHA-256 written as a `<key>.sha256` sidecar. With `--verify-restore` it additionally re-downloads the object and matches its SHA-256 against that sidecar (costs a full re-download; reserve for first/manual runs). An interrupted or unverified run leaves the archive in place; the next run finishes it (backs up + drops) before rotating again.
+- `--no-drop` runs everything except the drop, so you can inspect the backup (and its `.sha256`) and confirm before a later run — or a manual `DROP` — reclaims the space.
 - Object names are deterministic per archive (`{prefix}-{archive}.dump[.age]`, where `{archive}` carries a unique UTC timestamp): distinct and never overwritten across rotations, while a retry or recovery of the *same* archive reuses the key instead of accumulating duplicates. Point this at a **separate, permanent-retention bucket**, not the expiring DB-backup bucket.
 - Runs as the same DB role the application uses, so the fresh table is owned by (and writable by) the app.
 
@@ -250,6 +251,8 @@ Design notes:
 | `--audit-table` | `AUDIT_TABLE` | Audit table name | `audit` |
 | `--keep-tail-days` | `KEEP_TAIL_DAYS` | Also keep audit rows newer than N days in the live table (0 = keep only the read set) | `0` |
 | `--lock-timeout` | `LOCK_TIMEOUT` | `lock_timeout` for the rename; on contention the rotate rolls back and retries next run | `5s` |
+| `--no-drop` | `NO_DROP` | Rotate + back up + verify, but do NOT drop the archive (confirm manually, then a later run drops it) | `false` |
+| `--verify-restore` | `VERIFY_RESTORE` | Before dropping, re-download the archive and match its SHA-256 against the recorded sidecar digest (full re-download) | `false` |
 
 Shares the `pg` connection flags above and the storage/`--dump-prefix`/`--encryption-password` flags. `PGPASSWORD` must be set in the environment; the role needs write + DDL on the audit table.
 

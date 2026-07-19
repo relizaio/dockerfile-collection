@@ -10,6 +10,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	tmtypes "github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -39,11 +40,31 @@ func (p *s3Provider) UploadStream(ctx context.Context, remotePath string, reader
 		Bucket: aws.String(p.bucket),
 		Key:    aws.String(remotePath),
 		Body:   reader,
+		// Have S3 verify a SHA-256 of every (multipart) part server-side and refuse
+		// the object on any mismatch, so a "completed" upload is cryptographically
+		// integrity-checked -- at ~zero cost, on all backup modes.
+		ChecksumAlgorithm: tmtypes.ChecksumAlgorithmSha256,
 	})
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("upload interrupted: %w", err)
 	}
 	return err
+}
+
+// Head returns the stored object's size via a HeadObject call (no body download).
+func (p *s3Provider) Head(ctx context.Context, remotePath string) (*ObjectInfo, error) {
+	out, err := p.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(p.bucket),
+		Key:    aws.String(remotePath),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("head object %q failed: %w", remotePath, err)
+	}
+	var size int64
+	if out.ContentLength != nil {
+		size = *out.ContentLength
+	}
+	return &ObjectInfo{Size: size}, nil
 }
 
 func (p *s3Provider) DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error {

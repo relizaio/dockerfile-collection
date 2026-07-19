@@ -55,6 +55,20 @@ func (p *azureProvider) UploadStream(ctx context.Context, remotePath string, rea
 	return err
 }
 
+// Head returns the stored blob's size via GetProperties (no body download).
+func (p *azureProvider) Head(ctx context.Context, remotePath string) (*ObjectInfo, error) {
+	blobClient := p.client.ServiceClient().NewContainerClient(p.container).NewBlobClient(remotePath)
+	props, err := blobClient.GetProperties(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get properties for %q failed: %w", remotePath, err)
+	}
+	var size int64
+	if props.ContentLength != nil {
+		size = *props.ContentLength
+	}
+	return &ObjectInfo{Size: size}, nil
+}
+
 func (p *azureProvider) DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error {
 	stream, err := p.client.DownloadStream(ctx, p.container, remotePath, nil)
 	if err != nil {

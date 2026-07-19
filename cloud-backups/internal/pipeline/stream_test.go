@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"io"
+
+	"github.com/relizaio/cloud-backup/internal/storage"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -45,6 +47,10 @@ type mockStorage struct {
 func (m *mockStorage) UploadStream(ctx context.Context, path string, r io.Reader) error {
 	return m.uploadFn(ctx, path, r)
 }
+func (m *mockStorage) Head(ctx context.Context, path string) (*storage.ObjectInfo, error) {
+	return &storage.ObjectInfo{}, nil
+}
+
 func (m *mockStorage) DownloadStream(ctx context.Context, path string, w io.Writer) error {
 	return m.downloadFn(ctx, path, w)
 }

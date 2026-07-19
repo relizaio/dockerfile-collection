@@ -42,6 +42,8 @@ type AppConfig struct {
 	KeepTailDays     int    `mapstructure:"keep-tail-days"`
 	LockTimeout      string `mapstructure:"lock-timeout"`
 	AllowUnencrypted bool   `mapstructure:"allow-unencrypted"`
+	NoDrop           bool   `mapstructure:"no-drop"`
+	VerifyRestore    bool   `mapstructure:"verify-restore"`
 
 	// Shared fields
 	StorageType         string        `mapstructure:"backup-storage-type"`

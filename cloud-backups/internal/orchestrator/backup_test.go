@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"io"
+
+	"github.com/relizaio/cloud-backup/internal/storage"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +26,7 @@ func (m *mockSource) Backup(ctx context.Context, target string, out io.Writer) e
 	return nil
 }
 func (m *mockSource) Restore(ctx context.Context, target string, in io.Reader) error { return nil }
-func (m *mockSource) PreflightCheck(ctx context.Context, target string) error         { return nil }
+func (m *mockSource) PreflightCheck(ctx context.Context, target string) error        { return nil }
 
 type mockStorage struct{}
 
@@ -32,6 +34,10 @@ func (m *mockStorage) UploadStream(ctx context.Context, path string, r io.Reader
 	io.Copy(io.Discard, r)
 	return nil
 }
+func (m *mockStorage) Head(ctx context.Context, path string) (*storage.ObjectInfo, error) {
+	return &storage.ObjectInfo{}, nil
+}
+
 func (m *mockStorage) DownloadStream(ctx context.Context, path string, w io.Writer) error {
 	return nil
 }

@@ -98,11 +98,11 @@ func TestNewArchiveName(t *testing.T) {
 // --- drop-gate: the one irreversible step, unit-tested via the archiveBackend seam ---
 
 type fakeBackend struct {
-	cols        []string
-	queryErr    error
-	execErr     error
-	dumpOutcome string // "success" | "failure" | "skip" | "none"
-	execs       []string
+	cols      []string
+	queryErr  error
+	execErr   error
+	backupErr error // BackupAndVerify result: nil = fully verified
+	execs     []string
 }
 
 func (f *fakeBackend) QueryRows(_ context.Context, _ string) ([]string, error) {
@@ -112,17 +112,8 @@ func (f *fakeBackend) Exec(_ context.Context, sql string) error {
 	f.execs = append(f.execs, sql)
 	return f.execErr
 }
-func (f *fakeBackend) Dump(_ context.Context, archive string, tracker *stats.Tracker) {
-	tracker.RecordJob()
-	switch f.dumpOutcome {
-	case "success":
-		tracker.RecordSuccess()
-	case "failure":
-		tracker.RecordFailure(archive)
-	case "skip":
-		tracker.RecordSkipped(archive)
-	case "none": // record nothing -- the defensive case: gate must still refuse the drop
-	}
+func (f *fakeBackend) BackupAndVerify(_ context.Context, _ string, _ *stats.Tracker) error {
+	return f.backupErr
 }
 func (f *fakeBackend) dropped() bool {
 	for _, s := range f.execs {
@@ -134,25 +125,25 @@ func (f *fakeBackend) dropped() bool {
 }
 
 func TestBackupAndDropArchive_Gate(t *testing.T) {
-	cfg := &config.AppConfig{PGSchema: "rearm", AuditTable: "audit", LockTimeout: "5s"}
 	cases := []struct {
 		name        string
 		cols        []string
 		queryErr    error
-		dumpOutcome string
+		backupErr   error
+		noDrop      bool
 		wantErr     bool
 		wantDropped bool
 	}{
-		{"upload success -> drop", []string{"uuid"}, nil, "success", false, true},
-		{"upload failure -> no drop", []string{"uuid"}, nil, "failure", true, false},
-		{"upload skip -> no drop", []string{"uuid"}, nil, "skip", true, false},
-		{"no outcome recorded -> no drop", []string{"uuid"}, nil, "none", true, false},
-		{"empty shared columns -> no drop, no dump", nil, nil, "success", true, false},
-		{"query error -> no drop", []string{"uuid"}, errors.New("boom"), "success", true, false},
+		{"verified backup -> drop", []string{"uuid"}, nil, nil, false, false, true},
+		{"backup/verify failed -> no drop", []string{"uuid"}, nil, errors.New("upload failed"), false, true, false},
+		{"verified but --no-drop -> no drop, no error", []string{"uuid"}, nil, nil, true, false, false},
+		{"empty shared columns -> no drop, no backup", nil, nil, nil, false, true, false},
+		{"query error -> no drop", []string{"uuid"}, errors.New("boom"), nil, false, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := &fakeBackend{cols: tc.cols, queryErr: tc.queryErr, dumpOutcome: tc.dumpOutcome}
+			cfg := &config.AppConfig{PGSchema: "rearm", AuditTable: "audit", LockTimeout: "5s", NoDrop: tc.noDrop}
+			b := &fakeBackend{cols: tc.cols, queryErr: tc.queryErr, backupErr: tc.backupErr}
 			err := backupAndDropArchive(context.Background(), b, cfg, "audit_archive_x", stats.New())
 			if (err != nil) != tc.wantErr {
 				t.Errorf("err = %v, wantErr = %v", err, tc.wantErr)

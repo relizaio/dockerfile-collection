@@ -3,8 +3,10 @@ package cmd
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -67,6 +69,8 @@ func runPGAuditRotate() error {
 		KeepTailDays:        viper.GetInt("keep-tail-days"),
 		LockTimeout:         viper.GetString("lock-timeout"),
 		AllowUnencrypted:    viper.GetBool("allow-unencrypted"),
+		NoDrop:              viper.GetBool("no-drop"),
+		VerifyRestore:       viper.GetBool("verify-restore"),
 		StorageType:         viper.GetString("backup-storage-type"),
 		EncryptionPassword:  viper.GetString("encryption-password"),
 		DumpPrefix:          viper.GetString("dump-prefix"),
@@ -193,15 +197,17 @@ func runPGAuditRotate() error {
 }
 
 // archiveBackend is the seam backupAndDropArchive depends on. Isolating the DB
-// (QueryRows/Exec) and the dump-to-storage step behind an interface lets the
+// (QueryRows/Exec) and the backup+verify step behind an interface lets the
 // drop-gate -- the sole irreversible step -- be unit-tested with a fake, without
 // a real Postgres or object store.
 type archiveBackend interface {
 	QueryRows(ctx context.Context, sql string) ([]string, error)
 	Exec(ctx context.Context, sql string) error
-	// Dump streams the archive table to storage, recording exactly one outcome
-	// (success / failure / skip) on the tracker.
-	Dump(ctx context.Context, archive string, tracker *stats.Tracker)
+	// BackupAndVerify streams the archive table to storage and verifies it landed
+	// intact (upload success + HeadObject size match + sidecar SHA-256, and -- when
+	// verify-restore is set -- a full re-download SHA-256 match). Returns nil ONLY
+	// on a fully verified upload; the caller drops only on nil.
+	BackupAndVerify(ctx context.Context, archive string, tracker *stats.Tracker) error
 }
 
 // pgArchiveBackend is the production archiveBackend: real psql/pg_dump + storage.
@@ -211,12 +217,47 @@ type pgArchiveBackend struct {
 	cfg   *config.AppConfig
 }
 
-// Dump streams one archive table to storage under a DETERMINISTIC per-archive key
-// (the archive name carries a unique UTC timestamp + random suffix), so each
-// rotation gets a distinct, never-overwritten object -- while a retry or recovery
-// re-upload of the SAME archive reuses the key instead of littering the permanent
-// bucket with truncated/duplicate multi-GB objects.
-func (b *pgArchiveBackend) Dump(ctx context.Context, archive string, tracker *stats.Tracker) {
+// countingWriter counts bytes written (io.Writer) for the size check.
+type countingWriter struct{ n int64 }
+
+func (c *countingWriter) Write(p []byte) (int, error) { c.n += int64(len(p)); return len(p), nil }
+
+// hashingProvider wraps a storage.Provider and, on UploadStream, computes a SHA-256
+// and byte count of EXACTLY the bytes streamed to storage (the final stored object,
+// post-encryption). Used single-threaded per archive, so no locking is needed.
+type hashingProvider struct {
+	storage.Provider
+	sha256Hex string
+	bytes     int64
+}
+
+func (h *hashingProvider) UploadStream(ctx context.Context, remotePath string, reader io.Reader) error {
+	hasher := sha256.New()
+	counter := &countingWriter{}
+	tee := io.TeeReader(reader, io.MultiWriter(hasher, counter))
+	if err := h.Provider.UploadStream(ctx, remotePath, tee); err != nil {
+		return err
+	}
+	h.sha256Hex = hex.EncodeToString(hasher.Sum(nil))
+	h.bytes = counter.n
+	return nil
+}
+
+// objectKey returns the deterministic storage key for an archive's dump.
+func (b *pgArchiveBackend) objectKey(archive string) string {
+	suffix := ".dump"
+	if b.cfg.EncryptionPassword != "" {
+		suffix += ".age"
+	}
+	return fmt.Sprintf("%s-%s%s", b.cfg.DumpPrefix, archive, suffix)
+}
+
+// BackupAndVerify dumps the archive to a DETERMINISTIC per-archive key, then verifies
+// it landed intact before the caller drops it: (1) upload success (S3 verifies every
+// part's SHA-256 server-side and refuses on mismatch), (2) a HeadObject size match,
+// (3) a whole-object SHA-256 recorded as a sidecar, and (4) -- when verify-restore is
+// set -- a full re-download SHA-256 match against that digest.
+func (b *pgArchiveBackend) BackupAndVerify(ctx context.Context, archive string, tracker *stats.Tracker) error {
 	nameSuffix := ".dump"
 	var writerMods []pipeline.WriterModifier
 	if b.cfg.EncryptionPassword != "" {
@@ -224,15 +265,48 @@ func (b *pgArchiveBackend) Dump(ctx context.Context, archive string, tracker *st
 		writerMods = append(writerMods, pipeline.WithAgeEncryption(b.cfg.EncryptionPassword))
 	}
 	dumpClient := &pg.Client{Host: b.cfg.PGHost, Port: b.cfg.PGPort, Database: b.cfg.PGDatabase, User: b.cfg.PGUser, Table: fmt.Sprintf("%s.%s", b.cfg.PGSchema, archive)}
+	key := b.objectKey(archive)
 	backupName := fmt.Sprintf("%s-%s", b.cfg.DumpPrefix, archive)
-	pipeline.RunWithRetry(ctx, dumpClient, b.store, b.cfg.PGDatabase, backupName, nameSuffix, writerMods, tracker, b.cfg.Timeout, true)
+
+	hp := &hashingProvider{Provider: b.store}
+	successBefore := tracker.GetSuccess()
+	pipeline.RunWithRetry(ctx, dumpClient, hp, b.cfg.PGDatabase, backupName, nameSuffix, writerMods, tracker, b.cfg.Timeout, true)
+	if tracker.GetSuccess() <= successBefore {
+		return fmt.Errorf("upload did not complete for %s", key)
+	}
+
+	// Cheap: confirm the object exists with the exact size we streamed.
+	info, err := b.store.Head(ctx, key)
+	if err != nil {
+		return fmt.Errorf("post-upload HeadObject failed for %s: %w", key, err)
+	}
+	if info.Size != hp.bytes {
+		return fmt.Errorf("uploaded size mismatch for %s: streamed %d, stored %d", key, hp.bytes, info.Size)
+	}
+
+	// Record the whole-object SHA-256 as a sidecar for independent re-verification.
+	if err := b.store.UploadStream(ctx, key+".sha256", strings.NewReader(hp.sha256Hex+"\n")); err != nil {
+		return fmt.Errorf("writing sha256 sidecar for %s: %w", key, err)
+	}
+
+	if b.cfg.VerifyRestore {
+		hasher := sha256.New()
+		if err := b.store.DownloadStream(ctx, key, hasher); err != nil {
+			return fmt.Errorf("verify-restore re-download failed for %s: %w", key, err)
+		}
+		if got := hex.EncodeToString(hasher.Sum(nil)); got != hp.sha256Hex {
+			return fmt.Errorf("verify-restore SHA-256 mismatch for %s: recorded %s, re-downloaded %s", key, hp.sha256Hex, got)
+		}
+		slog.Info("archive_verify_restore_passed", "key", key, "sha256", hp.sha256Hex)
+	}
+	slog.Info("archive_backup_verified", "key", key, "size", hp.bytes, "sha256", hp.sha256Hex, "verify_restore", b.cfg.VerifyRestore)
+	return nil
 }
 
-// backupAndDropArchive carries the read set forward, streams the archive to
-// permanent storage, and -- only on a POSITIVELY confirmed upload success -- DROPs
-// it. Anything short of a new success (failure, skip, or no outcome at all) leaves
-// the archive for the next run's recovery: the drop is the sole irreversible step
-// and is never taken on an inferred signal.
+// backupAndDropArchive carries the read set forward, backs up + verifies the archive,
+// and -- only on a fully VERIFIED upload (and unless --no-drop) -- DROPs it. Anything
+// short of verified leaves the archive for the next run's recovery: the drop is the
+// sole irreversible step.
 func backupAndDropArchive(ctx context.Context, b archiveBackend, cfg *config.AppConfig, archive string, tracker *stats.Tracker) error {
 	fqTable := fmt.Sprintf("%s.%s", cfg.PGSchema, archive)
 
@@ -254,19 +328,22 @@ func backupAndDropArchive(ctx context.Context, b archiveBackend, cfg *config.App
 		return fmt.Errorf("keep-copy from %s failed: %w", fqTable, err)
 	}
 
-	successBefore := tracker.GetSuccess()
-	b.Dump(ctx, archive, tracker)
-	// Drop ONLY on a positively confirmed upload success. Failure, skip, or (defensively)
-	// no recorded outcome all leave the archive in place for next-run recovery.
-	if tracker.GetSuccess() <= successBefore {
-		return fmt.Errorf("archive %s not uploaded; leaving it in place for next-run recovery", fqTable)
+	// Back up + verify. Drop ONLY on nil (fully verified); any error leaves the
+	// archive in place for next-run recovery.
+	if err := b.BackupAndVerify(ctx, archive, tracker); err != nil {
+		return fmt.Errorf("archive %s not verified; leaving it in place for next-run recovery: %w", fqTable, err)
 	}
 
-	slog.Info("archive_uploaded_dropping", "archive", fqTable)
+	if cfg.NoDrop {
+		slog.Info("drop_deferred_no_drop", "archive", fqTable, "note", "backup verified; drop deferred -- run again without --no-drop, or DROP manually, after confirming")
+		return nil
+	}
+
+	slog.Info("archive_verified_dropping", "archive", fqTable)
 	if err := b.Exec(ctx, dropArchiveSQL(cfg.PGSchema, archive, cfg.LockTimeout)); err != nil {
-		// Upload succeeded; a drop that lost the lock race just leaves the archive
+		// Backup verified; a drop that lost the lock race just leaves the archive
 		// for next-run recovery (which re-uploads to the same key and retries).
-		return fmt.Errorf("archive uploaded but drop failed for %s: %w", fqTable, err)
+		return fmt.Errorf("archive verified but drop failed for %s: %w", fqTable, err)
 	}
 	return nil
 }
