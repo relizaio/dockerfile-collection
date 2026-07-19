@@ -126,21 +126,38 @@ func runPGAuditRotate() error {
 		return err
 	}
 
+	// The keep-copy's ON CONFLICT DO NOTHING is a silent no-op (and would duplicate
+	// INSTANCES rows on a recovery re-copy) unless a PK/UNIQUE constraint exists.
+	if uniq, err := pgClient.QueryRows(ctx, assertHasUniqueSQL(cfg.PGSchema, cfg.AuditTable)); err != nil {
+		slog.Error("unique_constraint_precheck_failed", "error", err.Error())
+		return err
+	} else if len(uniq) == 0 {
+		err := fmt.Errorf("audit table %s.%s has no PRIMARY KEY / UNIQUE constraint; audit-rotate needs one for idempotent keep-copy", cfg.PGSchema, cfg.AuditTable)
+		slog.Error("unsupported_audit_table", "error", err.Error())
+		return err
+	}
+
 	start := time.Now()
 	tracker := stats.New()
+	backend := &pgArchiveBackend{Client: pgClient, store: storeProvider, cfg: cfg}
 
 	// 1. Recover any archives left behind by an interrupted prior run: finish them
-	//    (back up + drop) BEFORE creating a new one, so archives never pile up.
+	//    (back up + drop) BEFORE creating a new one, so archives never pile up. A
+	//    single archive that can't be recovered (e.g. a live-table schema change it
+	//    can't be keep-copied into) is QUARANTINED (logged + surfaced at the end) but
+	//    must NOT halt the rotation -- otherwise one poison archive wedges the whole
+	//    disk-relief mechanism forever.
 	leftovers, err := pgClient.QueryRows(ctx, listArchivesSQL(cfg.PGSchema, cfg.AuditTable))
 	if err != nil {
 		slog.Error("list_pending_archives_failed", "error", err.Error())
 		return err
 	}
+	quarantined := 0
 	for _, archive := range leftovers {
 		slog.Info("recovering_pending_archive", "archive", archive)
-		if err := backupAndDropArchive(ctx, pgClient, storeProvider, cfg, archive, tracker); err != nil {
-			slog.Error("recover_pending_archive_failed", "archive", archive, "error", err.Error())
-			return err
+		if err := backupAndDropArchive(ctx, backend, cfg, archive, tracker); err != nil {
+			slog.Error("recover_pending_archive_quarantined", "archive", archive, "error", err.Error())
+			quarantined++
 		}
 	}
 
@@ -158,7 +175,7 @@ func runPGAuditRotate() error {
 	}
 
 	// 3. Carry forward the read set, back up the archive, then drop it.
-	if err := backupAndDropArchive(ctx, pgClient, storeProvider, cfg, archive, tracker); err != nil {
+	if err := backupAndDropArchive(ctx, backend, cfg, archive, tracker); err != nil {
 		slog.Error("backup_and_drop_failed", "archive", archive, "error", err.Error())
 		return err
 	}
@@ -167,14 +184,56 @@ func runPGAuditRotate() error {
 	if tracker.GetFailedCount() > 0 {
 		return fmt.Errorf("pg audit-rotate completed with failures")
 	}
+	if quarantined > 0 {
+		// Rotation succeeded (disk reclaimed for this cycle) but a leftover needs
+		// attention; return non-zero so the CronJob surfaces it.
+		return fmt.Errorf("%d leftover archive(s) could not be recovered and were quarantined; rotation proceeded", quarantined)
+	}
 	return nil
 }
 
-// backupAndDropArchive streams the archive table to permanent storage and, only
-// on a verified upload, DROPs it. If the upload fails the archive is left in
-// place for the next run's recovery step -- the drop is the sole irreversible
-// step and is always gated on a clean upload.
-func backupAndDropArchive(ctx context.Context, pgClient *pg.Client, store storage.Provider, cfg *config.AppConfig, archive string, tracker *stats.Tracker) error {
+// archiveBackend is the seam backupAndDropArchive depends on. Isolating the DB
+// (QueryRows/Exec) and the dump-to-storage step behind an interface lets the
+// drop-gate -- the sole irreversible step -- be unit-tested with a fake, without
+// a real Postgres or object store.
+type archiveBackend interface {
+	QueryRows(ctx context.Context, sql string) ([]string, error)
+	Exec(ctx context.Context, sql string) error
+	// Dump streams the archive table to storage, recording exactly one outcome
+	// (success / failure / skip) on the tracker.
+	Dump(ctx context.Context, archive string, tracker *stats.Tracker)
+}
+
+// pgArchiveBackend is the production archiveBackend: real psql/pg_dump + storage.
+type pgArchiveBackend struct {
+	*pg.Client
+	store storage.Provider
+	cfg   *config.AppConfig
+}
+
+// Dump streams one archive table to storage under a DETERMINISTIC per-archive key
+// (the archive name carries a unique UTC timestamp + random suffix), so each
+// rotation gets a distinct, never-overwritten object -- while a retry or recovery
+// re-upload of the SAME archive reuses the key instead of littering the permanent
+// bucket with truncated/duplicate multi-GB objects.
+func (b *pgArchiveBackend) Dump(ctx context.Context, archive string, tracker *stats.Tracker) {
+	nameSuffix := ".dump"
+	var writerMods []pipeline.WriterModifier
+	if b.cfg.EncryptionPassword != "" {
+		nameSuffix += ".age"
+		writerMods = append(writerMods, pipeline.WithAgeEncryption(b.cfg.EncryptionPassword))
+	}
+	dumpClient := &pg.Client{Host: b.cfg.PGHost, Port: b.cfg.PGPort, Database: b.cfg.PGDatabase, User: b.cfg.PGUser, Table: fmt.Sprintf("%s.%s", b.cfg.PGSchema, archive)}
+	backupName := fmt.Sprintf("%s-%s", b.cfg.DumpPrefix, archive)
+	pipeline.RunWithRetry(ctx, dumpClient, b.store, b.cfg.PGDatabase, backupName, nameSuffix, writerMods, tracker, b.cfg.Timeout, true)
+}
+
+// backupAndDropArchive carries the read set forward, streams the archive to
+// permanent storage, and -- only on a POSITIVELY confirmed upload success -- DROPs
+// it. Anything short of a new success (failure, skip, or no outcome at all) leaves
+// the archive for the next run's recovery: the drop is the sole irreversible step
+// and is never taken on an inferred signal.
+func backupAndDropArchive(ctx context.Context, b archiveBackend, cfg *config.AppConfig, archive string, tracker *stats.Tracker) error {
 	fqTable := fmt.Sprintf("%s.%s", cfg.PGSchema, archive)
 
 	// Carry the read set (INSTANCES + optional tail) forward from this sealed
@@ -184,42 +243,27 @@ func backupAndDropArchive(ctx context.Context, pgClient *pg.Client, store storag
 	// readable rows in an about-to-be-dropped archive. Columns are enumerated by
 	// NAME (not SELECT *) so a schema change to the live table between a failed run
 	// and its recovery copies the shared columns instead of wedging or corrupting.
-	cols, err := pgClient.QueryRows(ctx, sharedColumnsSQL(cfg.PGSchema, cfg.AuditTable, archive))
+	cols, err := b.QueryRows(ctx, sharedColumnsSQL(cfg.PGSchema, cfg.AuditTable, archive))
 	if err != nil {
 		return fmt.Errorf("resolving shared columns for %s: %w", fqTable, err)
 	}
 	if len(cols) == 0 {
 		return fmt.Errorf("no shared columns between %s.%s and %s -- refusing keep-copy", cfg.PGSchema, cfg.AuditTable, fqTable)
 	}
-	if err := pgClient.Exec(ctx, keepCopySQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.KeepTailDays, cols)); err != nil {
+	if err := b.Exec(ctx, keepCopySQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.KeepTailDays, cfg.LockTimeout, cols)); err != nil {
 		return fmt.Errorf("keep-copy from %s failed: %w", fqTable, err)
 	}
 
-	nameSuffix := ".dump"
-	var writerMods []pipeline.WriterModifier
-	if cfg.EncryptionPassword != "" {
-		nameSuffix += ".age"
-		writerMods = append(writerMods, pipeline.WithAgeEncryption(cfg.EncryptionPassword))
-	}
-
-	// Dump only this table. The object name is DETERMINISTIC per archive: the
-	// archive name carries a unique UTC timestamp + random suffix, so each rotation
-	// gets a distinct, never-overwritten key across runs -- while a retry or a
-	// recovery re-upload of the SAME archive reuses that key instead of littering
-	// the permanent (no-expiry) bucket with truncated/duplicate multi-GB objects.
-	dumpClient := &pg.Client{Host: cfg.PGHost, Port: cfg.PGPort, Database: cfg.PGDatabase, User: cfg.PGUser, Table: fqTable}
-	backupName := fmt.Sprintf("%s-%s", cfg.DumpPrefix, archive)
-
-	failedBefore := tracker.GetFailedCount()
-	skippedBefore := tracker.GetSkippedCount()
-	pipeline.RunWithRetry(ctx, dumpClient, store, cfg.PGDatabase, backupName, nameSuffix, writerMods, tracker, cfg.Timeout, true)
-	// Drop only on a positively verified upload: neither a failure nor a skip.
-	if tracker.GetFailedCount() > failedBefore || tracker.GetSkippedCount() > skippedBefore {
+	successBefore := tracker.GetSuccess()
+	b.Dump(ctx, archive, tracker)
+	// Drop ONLY on a positively confirmed upload success. Failure, skip, or (defensively)
+	// no recorded outcome all leave the archive in place for next-run recovery.
+	if tracker.GetSuccess() <= successBefore {
 		return fmt.Errorf("archive %s not uploaded; leaving it in place for next-run recovery", fqTable)
 	}
 
 	slog.Info("archive_uploaded_dropping", "archive", fqTable)
-	if err := pgClient.Exec(ctx, dropArchiveSQL(cfg.PGSchema, archive, cfg.LockTimeout)); err != nil {
+	if err := b.Exec(ctx, dropArchiveSQL(cfg.PGSchema, archive, cfg.LockTimeout)); err != nil {
 		// Upload succeeded; a drop that lost the lock race just leaves the archive
 		// for next-run recovery (which re-uploads to the same key and retries).
 		return fmt.Errorf("archive uploaded but drop failed for %s: %w", fqTable, err)
@@ -258,6 +302,16 @@ func listArchivesSQL(schema, audit string) string {
 func assertNoOwnedSequenceSQL(schema, audit string) string {
 	return fmt.Sprintf(
 		"SELECT column_name FROM information_schema.columns WHERE table_schema = '%s' AND table_name = '%s' AND (is_identity = 'YES' OR column_default LIKE 'nextval(%%');",
+		schema, audit,
+	)
+}
+
+// assertHasUniqueSQL returns the PRIMARY KEY / UNIQUE constraints on the audit
+// table. The keep-copy's ON CONFLICT DO NOTHING idempotency (safe re-copy on the
+// recovery path) is a no-op unless such a constraint exists; refuse if there is none.
+func assertHasUniqueSQL(schema, audit string) string {
+	return fmt.Sprintf(
+		"SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema = '%s' AND table_name = '%s' AND constraint_type IN ('PRIMARY KEY', 'UNIQUE');",
 		schema, audit,
 	)
 }
@@ -320,7 +374,7 @@ COMMIT;
 // index instead of a full seq-scan on the unindexed revision_created_date. A
 // generous statement_timeout=0 prevents a role-level statement_timeout from
 // aborting the copy. ON CONFLICT DO NOTHING guards against a rare concurrent re-audit.
-func keepCopySQL(schema, audit, archive string, keepTailDays int, cols []string) string {
+func keepCopySQL(schema, audit, archive string, keepTailDays int, lockTimeout string, cols []string) string {
 	quoted := make([]string, len(cols))
 	for i, c := range cols {
 		quoted[i] = `"` + strings.ReplaceAll(c, `"`, `""`) + `"`
@@ -331,11 +385,12 @@ func keepCopySQL(schema, audit, archive string, keepTailDays int, cols []string)
 		where += fmt.Sprintf("\n   OR revision_created_date >= now() - make_interval(days => %d)", keepTailDays)
 	}
 	return fmt.Sprintf(`SET statement_timeout = 0;
+SET lock_timeout = '%[6]s';
 INSERT INTO %[1]s.%[2]s (%[4]s)
 SELECT %[4]s FROM %[1]s.%[3]s
 WHERE %[5]s
 ON CONFLICT DO NOTHING;
-`, schema, audit, archive, colList, where)
+`, schema, audit, archive, colList, where, lockTimeout)
 }
 
 func init() {

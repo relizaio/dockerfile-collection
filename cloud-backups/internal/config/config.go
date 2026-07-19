@@ -182,6 +182,12 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 	if !sqlIdent.MatchString(c.AuditTable) {
 		return fmt.Errorf("--audit-table / AUDIT_TABLE must be a valid SQL identifier, got %q", c.AuditTable)
 	}
+	// The archive name is "<audit>_archive_<16-char utc>_<8 hex>" = <audit>+34 chars.
+	// Postgres truncates identifiers at 63 bytes; truncation would desync the Go name
+	// from the stored name and wedge keep-copy/drop/recovery. Bound the input.
+	if len(c.AuditTable) > 63-34 {
+		return fmt.Errorf("--audit-table / AUDIT_TABLE too long (%d chars); max 29 so the archive name stays within Postgres's 63-byte identifier limit", len(c.AuditTable))
+	}
 	if c.KeepTailDays < 0 {
 		return fmt.Errorf("--keep-tail-days / KEEP_TAIL_DAYS must be >= 0, got %d", c.KeepTailDays)
 	}

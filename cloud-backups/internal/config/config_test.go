@@ -468,6 +468,7 @@ func TestValidatePGAuditRotate(t *testing.T) {
 	bad := map[string]func(*AppConfig){
 		"bad schema":   func(c *AppConfig) { c.PGSchema = "rea rm" },
 		"bad table":    func(c *AppConfig) { c.AuditTable = "audit;drop" },
+		"long table":   func(c *AppConfig) { c.AuditTable = "a_very_long_audit_table_name_wont_fit" },
 		"neg tail":     func(c *AppConfig) { c.KeepTailDays = -1 },
 		"empty lock":   func(c *AppConfig) { c.LockTimeout = "" },
 		"missing db":   func(c *AppConfig) { c.PGDatabase = "" },
