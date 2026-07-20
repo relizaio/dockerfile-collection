@@ -600,21 +600,31 @@ COMMIT;
 // single transaction. lock_timeout keeps it fail-safe: on contention the whole
 // statement rolls back (table untouched) and the run retries next cycle. The
 // archive's constraints/indexes are renamed aside first so the fresh CREATE ...
-// LIKE gets stable, non-drifting canonical names.
+// LIKE can reclaim the canonical names.
+//
+// The rename-aside suffix is derived from the (unique) ARCHIVE name, NOT from the
+// original constraint/index name: multiple archives can coexist (a --no-drop staging
+// run, or a leftover that couldn't be dropped/was quarantined), and every rotation
+// starts from a fresh table whose PK is again named `audit_pkey`. A suffix derived
+// from the constant original name would collide schema-wide across archives
+// (`relation "audit_pkey_..." already exists`); md5(archive) makes it per-archive
+// unique. The renamed names are throwaway (the archive is dropped later); only
+// uniqueness matters. left(name,54)+'_'+8 stays within the 63-byte identifier limit.
 func rotateSQL(schema, audit, archive, lockTimeout string) string {
 	return fmt.Sprintf(`BEGIN;
 SET LOCAL lock_timeout = '%[4]s';
 ALTER TABLE %[1]s.%[2]s RENAME TO %[3]s;
 DO $ROT$
 DECLARE r record;
+DECLARE sfx text := substr(md5('%[3]s'), 1, 8);
 BEGIN
   FOR r IN SELECT conname FROM pg_constraint WHERE conrelid = '%[1]s.%[3]s'::regclass LOOP
-    EXECUTE format('ALTER TABLE %[1]s.%[3]s RENAME CONSTRAINT %%I TO %%I', r.conname, left(r.conname, 55) || '_' || substr(md5(r.conname), 1, 7));
+    EXECUTE format('ALTER TABLE %[1]s.%[3]s RENAME CONSTRAINT %%I TO %%I', r.conname, left(r.conname, 54) || '_' || sfx);
   END LOOP;
   FOR r IN SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
            WHERE i.indrelid = '%[1]s.%[3]s'::regclass
              AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid) LOOP
-    EXECUTE format('ALTER INDEX %[1]s.%%I RENAME TO %%I', r.relname, left(r.relname, 55) || '_' || substr(md5(r.relname), 1, 7));
+    EXECUTE format('ALTER INDEX %[1]s.%%I RENAME TO %%I', r.relname, left(r.relname, 54) || '_' || sfx);
   END LOOP;
 END
 $ROT$;
