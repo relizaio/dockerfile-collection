@@ -29,8 +29,9 @@ var (
 
 // RunWithRetry handles the retry logic and graceful degradation for missing source targets.
 // nameSuffix is appended to the remote filename (e.g. ".tar.gz" or ".tar.gz.age").
+// totalHint is an APPROXIMATE expected byte count for progress percent/ETA (0 = unknown).
 // writerModifiers are applied in order to the upload stream (compress, then encrypt).
-func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, tracker *stats.Tracker, timeout time.Duration, deterministicName bool) {
+func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, tracker *stats.Tracker, timeout time.Duration, deterministicName bool, totalHint int64) {
 	tracker.RecordJob()
 	startTimer := time.Now()
 	jobHandled := false
@@ -45,7 +46,7 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 			return
 		}
 		slog.Info("backup_started", "target", target, "attempt", attempt)
-		bytesUploaded, err := executeStream(ctx, src, storeProvider, target, backupName, nameSuffix, writerModifiers, timeout, deterministicName)
+		bytesUploaded, err := executeStream(ctx, src, storeProvider, target, backupName, nameSuffix, writerModifiers, timeout, deterministicName, totalHint)
 		if err == nil {
 			slog.Info("backup_successful", "target", target, "duration", time.Since(startTimer).Round(time.Second).String(), "size_human", stats.FormatBytes(bytesUploaded))
 			jobHandled = true
@@ -86,7 +87,7 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 	slog.Error("backup_exhausted", "target", target)
 }
 
-func executeStream(parentCtx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, timeout time.Duration, deterministicName bool) (int64, error) {
+func executeStream(parentCtx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, timeout time.Duration, deterministicName bool, totalHint int64) (int64, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
@@ -144,7 +145,7 @@ func executeStream(parentCtx context.Context, src datasource.Source, storeProvid
 		}
 	}()
 
-	mon := progress.New(&counter.bytesRead, target, 10*time.Second)
+	mon := progress.New(&counter.bytesRead, target, 10*time.Second, totalHint)
 	mon.Start(ctx)
 
 	uploadErr := storeProvider.UploadStream(ctx, remotePath, counter)

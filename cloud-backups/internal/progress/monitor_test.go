@@ -2,6 +2,9 @@ package progress
 
 import (
 	"context"
+	"log/slog"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -9,7 +12,7 @@ import (
 
 func TestNew_FieldsSet(t *testing.T) {
 	var counter atomic.Int64
-	m := New(&counter, "test/path", 5*time.Second)
+	m := New(&counter, "test/path", 5*time.Second, 0)
 	if m.bytesRead != &counter {
 		t.Error("bytesRead pointer not set correctly")
 	}
@@ -26,7 +29,7 @@ func TestNew_FieldsSet(t *testing.T) {
 
 func TestMonitor_StartStop_NoPanic(t *testing.T) {
 	var counter atomic.Int64
-	m := New(&counter, "target", 100*time.Millisecond)
+	m := New(&counter, "target", 100*time.Millisecond, 0)
 	ctx := context.Background()
 	m.Start(ctx)
 	// Let the goroutine tick at least once
@@ -38,7 +41,7 @@ func TestMonitor_StartStop_NoPanic(t *testing.T) {
 
 func TestMonitor_ContextCancel_ExitsGoroutine(t *testing.T) {
 	var counter atomic.Int64
-	m := New(&counter, "target", 50*time.Millisecond)
+	m := New(&counter, "target", 50*time.Millisecond, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.Start(ctx)
 	time.Sleep(30 * time.Millisecond)
@@ -51,7 +54,7 @@ func TestMonitor_ContextCancel_ExitsGoroutine(t *testing.T) {
 
 func TestMonitor_ByteProgressLogged(t *testing.T) {
 	var counter atomic.Int64
-	m := New(&counter, "target", 20*time.Millisecond)
+	m := New(&counter, "target", 20*time.Millisecond, 0)
 	ctx := context.Background()
 	m.Start(ctx)
 
@@ -65,10 +68,133 @@ func TestMonitor_ByteProgressLogged(t *testing.T) {
 func TestMonitor_StallWarning(t *testing.T) {
 	var counter atomic.Int64
 	counter.Store(512) // non-zero but won't change → stall warning path
-	m := New(&counter, "target", 20*time.Millisecond)
+	m := New(&counter, "target", 20*time.Millisecond, 0)
 	ctx := context.Background()
 	m.Start(ctx)
 	time.Sleep(60 * time.Millisecond)
 	m.Stop()
 	// Verifies stall code path executes without panic
+}
+
+// syncBuf is a concurrency-safe writer for capturing slog output from the monitor
+// goroutine.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+func TestMonitor_PercentAndETA_WhenTotalKnown(t *testing.T) {
+	buf := &syncBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	defer slog.SetDefault(old)
+
+	var counter atomic.Int64
+	m := New(&counter, "target", 20*time.Millisecond, 1000) // total known
+	m.Start(context.Background())
+	counter.Store(400)
+	time.Sleep(30 * time.Millisecond)
+	counter.Store(700)
+	time.Sleep(30 * time.Millisecond)
+	m.Stop()
+	time.Sleep(30 * time.Millisecond) // let the goroutine exit before reading
+
+	out := buf.String()
+	if !strings.Contains(out, "percent_approx") {
+		t.Errorf("expected percent_approx when total is known; got:\n%s", out)
+	}
+	if !strings.Contains(out, "eta_approx") {
+		t.Errorf("expected eta_approx when total is known; got:\n%s", out)
+	}
+}
+
+func TestMonitor_PreciseAndEvent_UsesExactLabelsAndCustomEvent(t *testing.T) {
+	buf := &syncBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	defer slog.SetDefault(old)
+
+	var counter atomic.Int64
+	m := New(&counter, "verify-restore:key", 20*time.Millisecond, 1000).
+		SetEvent("verify_download_in_progress", "verify_download_stalled_or_waiting").SetPrecise()
+	m.Start(context.Background())
+	counter.Store(400)
+	time.Sleep(30 * time.Millisecond)
+	counter.Store(700)
+	time.Sleep(30 * time.Millisecond)
+	m.Stop()
+	time.Sleep(30 * time.Millisecond) // let the goroutine exit before reading
+
+	out := buf.String()
+	if !strings.Contains(out, "verify_download_in_progress") {
+		t.Errorf("expected custom event msg; got:\n%s", out)
+	}
+	// Precise mode uses exact labels, not the _approx variants.
+	if !strings.Contains(out, "percent=") || strings.Contains(out, "percent_approx") {
+		t.Errorf("expected exact percent= (not percent_approx) in precise mode; got:\n%s", out)
+	}
+	if !strings.Contains(out, "eta=") || strings.Contains(out, "eta_approx") {
+		t.Errorf("expected exact eta= (not eta_approx) in precise mode; got:\n%s", out)
+	}
+}
+
+// A custom stall event must be used for the stall warning (not the hardcoded
+// "upload_stalled_or_waiting"), so a verify-restore DOWNLOAD stall reads correctly.
+func TestMonitor_StallWarning_UsesCustomStallEvent(t *testing.T) {
+	buf := &syncBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	defer slog.SetDefault(old)
+
+	var counter atomic.Int64
+	counter.Store(512) // non-zero and never changes → stall branch
+	m := New(&counter, "verify-restore:key", 20*time.Millisecond, 1000).
+		SetEvent("verify_download_in_progress", "verify_download_stalled_or_waiting")
+	m.Start(context.Background())
+	time.Sleep(60 * time.Millisecond)
+	m.Stop()
+	time.Sleep(30 * time.Millisecond)
+
+	out := buf.String()
+	if !strings.Contains(out, "verify_download_stalled_or_waiting") {
+		t.Errorf("expected custom stall event; got:\n%s", out)
+	}
+	if strings.Contains(out, "upload_stalled_or_waiting") {
+		t.Errorf("stall warning leaked the default upload event; got:\n%s", out)
+	}
+}
+
+// A near-stall (a few bytes moved over the interval) on a multi-GB remaining must
+// NOT log a wrapped/negative ETA -- the ETA is omitted rather than overflowed.
+func TestMonitor_ETA_OmittedOnOverflow(t *testing.T) {
+	buf := &syncBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	defer slog.SetDefault(old)
+
+	// 1 PiB remaining with only single-byte progress per tick: remaining/bps far
+	// exceeds int64-ns Duration range, so an unguarded `time.Duration(secs)*time.Second`
+	// would wrap. The guard must omit the ETA instead.
+	const total = int64(1) << 50 // 1 PiB
+	var counter atomic.Int64
+	m := New(&counter, "target", 20*time.Millisecond, total)
+	m.Start(context.Background())
+	counter.Store(1) // 1 byte moved
+	time.Sleep(30 * time.Millisecond)
+	counter.Store(2) // another single byte so we stay in the progress (not stall) branch
+	time.Sleep(30 * time.Millisecond)
+	m.Stop()
+	time.Sleep(30 * time.Millisecond)
+
+	out := buf.String()
+	if !strings.Contains(out, "percent_approx") {
+		t.Fatalf("expected a progress line with percent; got:\n%s", out)
+	}
+	// ETA is omitted entirely when it would overflow -- never a wrapped/negative value.
+	if strings.Contains(out, "eta_approx") {
+		t.Errorf("expected ETA omitted on overflow, but an eta_approx was logged; got:\n%s", out)
+	}
 }

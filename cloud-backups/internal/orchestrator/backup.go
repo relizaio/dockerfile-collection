@@ -80,7 +80,7 @@ func (m *BackupManager) RunBackups(ctx context.Context, basePaths []string, roll
 			}
 			defer func() { <-sem }()
 
-			pipeline.RunWithRetry(ctx, m.DataSource, m.Storage, targetPath, fileName, nameSuffix, writerMods, m.Tracker, m.Timeout, m.DeterministicName)
+			pipeline.RunWithRetry(ctx, m.DataSource, m.Storage, targetPath, fileName, nameSuffix, writerMods, m.Tracker, m.Timeout, m.DeterministicName, 0)
 		}(path, backupName)
 	}
 

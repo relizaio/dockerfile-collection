@@ -11,7 +11,9 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/relizaio/cloud-backup/internal/config"
 	"github.com/relizaio/cloud-backup/internal/pg"
 	"github.com/relizaio/cloud-backup/internal/pipeline"
+	"github.com/relizaio/cloud-backup/internal/progress"
 	"github.com/relizaio/cloud-backup/internal/stats"
 	"github.com/relizaio/cloud-backup/internal/storage"
 )
@@ -265,6 +268,13 @@ type countingWriter struct{ n int64 }
 
 func (c *countingWriter) Write(p []byte) (int, error) { c.n += int64(len(p)); return len(p), nil }
 
+// atomicCountWriter counts bytes written into an atomic counter so a progress.Monitor
+// on another goroutine can read it concurrently. Used to surface verify-restore
+// re-download progress (the download goroutine writes; the monitor reads).
+type atomicCountWriter struct{ n *atomic.Int64 }
+
+func (a *atomicCountWriter) Write(p []byte) (int, error) { a.n.Add(int64(len(p))); return len(p), nil }
+
 // hashingProvider wraps a storage.Provider and, on UploadStream, computes a SHA-256
 // and byte count of EXACTLY the bytes streamed to storage (the final stored object,
 // post-encryption). Used single-threaded per archive, so no locking is needed.
@@ -323,9 +333,21 @@ func (b *pgArchiveBackend) BackupAndVerify(ctx context.Context, archive string, 
 	dumpClient := &pg.Client{Host: b.cfg.PGHost, Port: b.cfg.PGPort, Database: b.cfg.PGDatabase, User: b.cfg.PGUser, Table: fmt.Sprintf("%s.%s", b.cfg.PGSchema, archive)}
 	backupName := fmt.Sprintf("%s-%s", b.cfg.DumpPrefix, archive)
 
+	// Estimate the dump size from the table's on-disk size so the upload progress can
+	// report an approximate percent + ETA and the watcher has a size expectation up
+	// front. pg_table_size = heap + TOAST (no indexes); the compressed dump is usually
+	// somewhat smaller, so this is an approximate upper bound.
+	var totalHint int64
+	if rows, err := b.QueryRows(ctx, fmt.Sprintf("SELECT pg_table_size('%s.%s')", b.cfg.PGSchema, archive)); err == nil && len(rows) == 1 {
+		if n, perr := strconv.ParseInt(rows[0], 10, 64); perr == nil {
+			totalHint = n
+			slog.Info("archive_backup_starting", "archive", archive, "estimated_size", stats.FormatBytes(n), "note", "estimate from table size; the compressed/encrypted object may differ")
+		}
+	}
+
 	hp := &hashingProvider{Provider: b.store}
 	successBefore := tracker.GetSuccess()
-	pipeline.RunWithRetry(ctx, dumpClient, hp, b.cfg.PGDatabase, backupName, nameSuffix, writerMods, tracker, b.cfg.Timeout, true)
+	pipeline.RunWithRetry(ctx, dumpClient, hp, b.cfg.PGDatabase, backupName, nameSuffix, writerMods, tracker, b.cfg.Timeout, true, totalHint)
 	if tracker.GetSuccess() <= successBefore {
 		return fmt.Errorf("upload did not complete for %s", key)
 	}
@@ -355,7 +377,7 @@ func (b *pgArchiveBackend) verifyUploadedObject(ctx context.Context, key string,
 		return fmt.Errorf("writing sha256 sidecar for %s: %w", key, err)
 	}
 	if b.cfg.VerifyRestore {
-		if err := b.verifyRestorable(ctx, key, wantSHA256); err != nil {
+		if err := b.verifyRestorable(ctx, key, wantSHA256, info.Size); err != nil {
 			return err
 		}
 		slog.Info("archive_verify_restore_passed", "key", key, "sha256", wantSHA256)
@@ -367,14 +389,33 @@ func (b *pgArchiveBackend) verifyUploadedObject(ctx context.Context, key string,
 // to wantSHA256 (independent, end-to-end byte integrity) AND -- decrypting first if
 // needed -- that `pg_restore -l` accepts it (a structurally valid, restorable dump).
 // The download is teed into the hasher while pg_restore consumes the decrypted stream.
-func (b *pgArchiveBackend) verifyRestorable(ctx context.Context, key, wantSHA256 string) error {
+// total is the exact object size (from HeadObject), so re-download progress can report
+// a real (not estimated) percent-done and ETA; the long re-download would otherwise be
+// silent and look like a hang.
+func (b *pgArchiveBackend) verifyRestorable(ctx context.Context, key, wantSHA256 string, total int64) error {
 	pr, pw := io.Pipe()
 	hasher := sha256.New()
 	dlErrCh := make(chan error, 1)
+	var downloaded atomic.Int64
+	slog.Info("archive_verify_restore_starting", "key", key, "download_size", stats.FormatBytes(total))
+	mon := progress.New(&downloaded, "verify-restore:"+key, 10*time.Second, total).
+		SetEvent("verify_download_in_progress", "verify_download_stalled_or_waiting").SetPrecise()
+	mon.Start(ctx)
 	go func() {
-		err := b.store.DownloadStream(ctx, key, io.MultiWriter(hasher, pw))
-		pw.CloseWithError(err)
-		dlErrCh <- err
+		var err error
+		// Guarantee the monitor is stopped, the pipe is closed, and dlErrCh receives
+		// exactly once on EVERY exit -- including a panic in DownloadStream/MultiWriter
+		// (mirrors executeStream's download goroutine) so the reader never hangs on
+		// <-dlErrCh and the monitor goroutine never leaks.
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic in verify-restore download: %v", r)
+			}
+			mon.Stop()
+			pw.CloseWithError(err)
+			dlErrCh <- err
+		}()
+		err = b.store.DownloadStream(ctx, key, io.MultiWriter(hasher, &atomicCountWriter{&downloaded}, pw))
 	}()
 
 	var reader io.Reader = pr
@@ -427,14 +468,15 @@ func (b *pgArchiveBackend) verifyExistingAndDrop(ctx context.Context, archive st
 	vctx, cancel := b.verifyCtx(ctx)
 	defer cancel()
 
-	if _, err := b.store.Head(vctx, key); err != nil {
+	info, err := b.store.Head(vctx, key)
+	if err != nil {
 		return fmt.Errorf("no backup object for %s: %w", key, err)
 	}
 	want, err := b.readSidecar(vctx, key)
 	if err != nil {
 		return err
 	}
-	if err := b.verifyRestorable(vctx, key, want); err != nil {
+	if err := b.verifyRestorable(vctx, key, want, info.Size); err != nil {
 		return err
 	}
 	slog.Info("pending_archive_verified_dropping", "schema", b.cfg.PGSchema, "archive", archive, "key", key, "sha256", want)
