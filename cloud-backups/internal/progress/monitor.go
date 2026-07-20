@@ -4,12 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/relizaio/cloud-backup/internal/stats"
 )
+
+// maxETASeconds is the largest remaining-seconds estimate we'll turn into a
+// time.Duration. Above it, `time.Duration(secs) * time.Second` overflows int64
+// nanoseconds and would log a garbage/negative ETA, so we omit the ETA instead.
+const maxETASeconds = float64(math.MaxInt64 / int64(time.Second))
 
 // Monitor periodically logs transfer speed and stall warnings for a byte counter.
 type Monitor struct {
@@ -18,18 +24,25 @@ type Monitor struct {
 	interval     time.Duration
 	total        int64  // expected size; 0 = unknown (no percent/ETA)
 	event        string // slog msg for progress lines (default "upload_in_progress")
+	stallEvent   string // slog msg for stall warnings (default "upload_stalled_or_waiting")
 	precise      bool   // total is exact (not an estimate): report percent/eta, uncapped
 	done         chan struct{}
 	stopOnce     sync.Once
 }
 
-// SetEvent overrides the slog message used for progress lines (e.g. for a download
-// instead of an upload). Returns the Monitor for chaining.
-func (m *Monitor) SetEvent(event string) *Monitor { m.event = event; return m }
+// SetEvent overrides the slog messages for progress lines and stall warnings (e.g.
+// for a download instead of an upload). Must be called BEFORE Start() -- the fields
+// are read by the monitor goroutine without synchronization. Returns m for chaining.
+func (m *Monitor) SetEvent(progressEvent, stallEvent string) *Monitor {
+	m.event = progressEvent
+	m.stallEvent = stallEvent
+	return m
+}
 
 // SetPrecise marks total as an EXACT byte count (e.g. a HeadObject size for a
 // re-download) rather than an estimate. Progress lines then report "percent"/"eta"
-// (not "_approx") and percent is not capped below 100. Returns the Monitor for chaining.
+// (not "_approx") and percent is not capped below 100. Must be called BEFORE Start().
+// Returns m for chaining.
 func (m *Monitor) SetPrecise() *Monitor { m.precise = true; return m }
 
 // New creates a Monitor. bytesRead must be the same atomic counter advanced by the
@@ -43,6 +56,7 @@ func New(bytesRead *atomic.Int64, registryPath string, interval time.Duration, t
 		interval:     interval,
 		total:        total,
 		event:        "upload_in_progress",
+		stallEvent:   "upload_stalled_or_waiting",
 		done:         make(chan struct{}),
 	}
 }
@@ -79,15 +93,20 @@ func (m *Monitor) Start(ctx context.Context) {
 							pct = 99.9
 						}
 						attrs = append(attrs, pctKey, fmt.Sprintf("%.1f%%", pct))
-						if bps := float64(delta) / m.interval.Seconds(); bps > 0 && current < m.total {
-							eta := time.Duration(float64(m.total-current)/bps) * time.Second
-							attrs = append(attrs, etaKey, eta.Round(time.Second).String())
+						// bps > 0 always holds here (delta >= 1); guard the ETA against int64
+						// nanosecond overflow at absurdly low speeds (a near-stall) so we never
+						// log a wrapped/negative Duration -- omit it instead.
+						if bps := float64(delta) / m.interval.Seconds(); current < m.total {
+							if etaSecs := float64(m.total-current) / bps; etaSecs < maxETASeconds {
+								eta := time.Duration(etaSecs * float64(time.Second))
+								attrs = append(attrs, etaKey, eta.Round(time.Second).String())
+							}
 						}
 					}
 					slog.Info(m.event, attrs...)
 					lastBytes = current
 				} else if current > 0 {
-					slog.Warn("upload_stalled_or_waiting",
+					slog.Warn(m.stallEvent,
 						"registry_path", m.registryPath,
 						"stuck_at", stats.FormatBytes(current),
 					)

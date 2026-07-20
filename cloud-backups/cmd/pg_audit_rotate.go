@@ -398,13 +398,24 @@ func (b *pgArchiveBackend) verifyRestorable(ctx context.Context, key, wantSHA256
 	dlErrCh := make(chan error, 1)
 	var downloaded atomic.Int64
 	slog.Info("archive_verify_restore_starting", "key", key, "download_size", stats.FormatBytes(total))
-	mon := progress.New(&downloaded, "verify-restore:"+key, 10*time.Second, total).SetEvent("verify_download_in_progress").SetPrecise()
+	mon := progress.New(&downloaded, "verify-restore:"+key, 10*time.Second, total).
+		SetEvent("verify_download_in_progress", "verify_download_stalled_or_waiting").SetPrecise()
 	mon.Start(ctx)
 	go func() {
-		err := b.store.DownloadStream(ctx, key, io.MultiWriter(hasher, &atomicCountWriter{&downloaded}, pw))
-		mon.Stop()
-		pw.CloseWithError(err)
-		dlErrCh <- err
+		var err error
+		// Guarantee the monitor is stopped, the pipe is closed, and dlErrCh receives
+		// exactly once on EVERY exit -- including a panic in DownloadStream/MultiWriter
+		// (mirrors executeStream's download goroutine) so the reader never hangs on
+		// <-dlErrCh and the monitor goroutine never leaks.
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic in verify-restore download: %v", r)
+			}
+			mon.Stop()
+			pw.CloseWithError(err)
+			dlErrCh <- err
+		}()
+		err = b.store.DownloadStream(ctx, key, io.MultiWriter(hasher, &atomicCountWriter{&downloaded}, pw))
 	}()
 
 	var reader io.Reader = pr

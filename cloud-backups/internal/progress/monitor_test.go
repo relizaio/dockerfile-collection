@@ -119,7 +119,7 @@ func TestMonitor_PreciseAndEvent_UsesExactLabelsAndCustomEvent(t *testing.T) {
 
 	var counter atomic.Int64
 	m := New(&counter, "verify-restore:key", 20*time.Millisecond, 1000).
-		SetEvent("verify_download_in_progress").SetPrecise()
+		SetEvent("verify_download_in_progress", "verify_download_stalled_or_waiting").SetPrecise()
 	m.Start(context.Background())
 	counter.Store(400)
 	time.Sleep(30 * time.Millisecond)
@@ -138,5 +138,63 @@ func TestMonitor_PreciseAndEvent_UsesExactLabelsAndCustomEvent(t *testing.T) {
 	}
 	if !strings.Contains(out, "eta=") || strings.Contains(out, "eta_approx") {
 		t.Errorf("expected exact eta= (not eta_approx) in precise mode; got:\n%s", out)
+	}
+}
+
+// A custom stall event must be used for the stall warning (not the hardcoded
+// "upload_stalled_or_waiting"), so a verify-restore DOWNLOAD stall reads correctly.
+func TestMonitor_StallWarning_UsesCustomStallEvent(t *testing.T) {
+	buf := &syncBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	defer slog.SetDefault(old)
+
+	var counter atomic.Int64
+	counter.Store(512) // non-zero and never changes → stall branch
+	m := New(&counter, "verify-restore:key", 20*time.Millisecond, 1000).
+		SetEvent("verify_download_in_progress", "verify_download_stalled_or_waiting")
+	m.Start(context.Background())
+	time.Sleep(60 * time.Millisecond)
+	m.Stop()
+	time.Sleep(30 * time.Millisecond)
+
+	out := buf.String()
+	if !strings.Contains(out, "verify_download_stalled_or_waiting") {
+		t.Errorf("expected custom stall event; got:\n%s", out)
+	}
+	if strings.Contains(out, "upload_stalled_or_waiting") {
+		t.Errorf("stall warning leaked the default upload event; got:\n%s", out)
+	}
+}
+
+// A near-stall (a few bytes moved over the interval) on a multi-GB remaining must
+// NOT log a wrapped/negative ETA -- the ETA is omitted rather than overflowed.
+func TestMonitor_ETA_OmittedOnOverflow(t *testing.T) {
+	buf := &syncBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	defer slog.SetDefault(old)
+
+	// 1 PiB remaining with only single-byte progress per tick: remaining/bps far
+	// exceeds int64-ns Duration range, so an unguarded `time.Duration(secs)*time.Second`
+	// would wrap. The guard must omit the ETA instead.
+	const total = int64(1) << 50 // 1 PiB
+	var counter atomic.Int64
+	m := New(&counter, "target", 20*time.Millisecond, total)
+	m.Start(context.Background())
+	counter.Store(1) // 1 byte moved
+	time.Sleep(30 * time.Millisecond)
+	counter.Store(2) // another single byte so we stay in the progress (not stall) branch
+	time.Sleep(30 * time.Millisecond)
+	m.Stop()
+	time.Sleep(30 * time.Millisecond)
+
+	out := buf.String()
+	if !strings.Contains(out, "percent_approx") {
+		t.Fatalf("expected a progress line with percent; got:\n%s", out)
+	}
+	// ETA is omitted entirely when it would overflow -- never a wrapped/negative value.
+	if strings.Contains(out, "eta_approx") {
+		t.Errorf("expected ETA omitted on overflow, but an eta_approx was logged; got:\n%s", out)
 	}
 }
