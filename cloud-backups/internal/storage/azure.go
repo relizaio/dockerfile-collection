@@ -62,11 +62,10 @@ func (p *azureProvider) Head(ctx context.Context, remotePath string) (*ObjectInf
 	if err != nil {
 		return nil, fmt.Errorf("get properties for %q failed: %w", remotePath, err)
 	}
-	var size int64
-	if props.ContentLength != nil {
-		size = *props.ContentLength
+	if props.ContentLength == nil {
+		return nil, fmt.Errorf("get properties for %q returned no ContentLength", remotePath)
 	}
-	return &ObjectInfo{Size: size}, nil
+	return &ObjectInfo{Size: *props.ContentLength}, nil
 }
 
 func (p *azureProvider) DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error {
@@ -74,7 +73,10 @@ func (p *azureProvider) DownloadStream(ctx context.Context, remotePath string, w
 	if err != nil {
 		return fmt.Errorf("failed to start Azure download: %w", err)
 	}
-	defer stream.Body.Close()
-	_, err = io.Copy(writer, stream.Body)
+	// NewRetryReader reconnects mid-stream on a transient drop, so a whole-blob
+	// read (e.g. verify-restore) is not killed by the client's per-try timeout.
+	body := stream.NewRetryReader(ctx, &azblob.RetryReaderOptions{MaxRetries: MaxRetries})
+	defer body.Close()
+	_, err = io.Copy(writer, body)
 	return err
 }

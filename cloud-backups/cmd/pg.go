@@ -28,7 +28,8 @@ func init() {
 	pgCmd.PersistentFlags().String("lock-timeout", "5s", "audit-rotate: lock_timeout for the rename step; on contention the rotate rolls back and retries next run (ENV: LOCK_TIMEOUT)")
 	pgCmd.PersistentFlags().Bool("allow-unencrypted", false, "audit-rotate: allow writing an UNENCRYPTED dump to the permanent bucket when no --encryption-password is set (ENV: ALLOW_UNENCRYPTED)")
 	pgCmd.PersistentFlags().Bool("no-drop", false, "audit-rotate: rotate + back up + verify, but do NOT drop the archive (leave it for manual confirmation, then a later run drops it) (ENV: NO_DROP)")
-	pgCmd.PersistentFlags().Bool("verify-restore", false, "audit-rotate: before dropping, re-download the archive and match its SHA-256 against the recorded digest (costs a full re-download) (ENV: VERIFY_RESTORE)")
+	pgCmd.PersistentFlags().Bool("verify-restore", false, "audit-rotate: before dropping, re-download the archive, decrypt it, run pg_restore -l (proves it's a restorable dump), and match its SHA-256 (full re-download) (ENV: VERIFY_RESTORE)")
+	pgCmd.PersistentFlags().Bool("drop-pending", false, "audit-rotate: do NOT rotate; instead verify each already-backed-up leftover archive against its stored .sha256 sidecar (+ pg_restore -l) and drop it. The confirm step after a --no-drop run. (ENV: DROP_PENDING)")
 
 	mustBindPFlag := func(key, flagName string) {
 		if err := viper.BindPFlag(key, pgCmd.PersistentFlags().Lookup(flagName)); err != nil {
@@ -46,4 +47,5 @@ func init() {
 	mustBindPFlag("allow-unencrypted", "allow-unencrypted")
 	mustBindPFlag("no-drop", "no-drop")
 	mustBindPFlag("verify-restore", "verify-restore")
+	mustBindPFlag("drop-pending", "drop-pending")
 }

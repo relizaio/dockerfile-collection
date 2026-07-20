@@ -3,13 +3,72 @@ package cmd
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/relizaio/cloud-backup/internal/config"
 	"github.com/relizaio/cloud-backup/internal/stats"
+	"github.com/relizaio/cloud-backup/internal/storage"
 )
+
+// fakeStore is a storage.Provider that records sidecar uploads and returns a
+// configurable Head, for unit-testing the post-upload verification gate.
+type fakeStore struct {
+	headSize  int64
+	headErr   error
+	uploadErr error
+	uploaded  map[string]bool
+}
+
+func (f *fakeStore) UploadStream(_ context.Context, path string, r io.Reader) error {
+	_, _ = io.Copy(io.Discard, r)
+	if f.uploadErr == nil {
+		if f.uploaded == nil {
+			f.uploaded = map[string]bool{}
+		}
+		f.uploaded[path] = true
+	}
+	return f.uploadErr
+}
+func (f *fakeStore) DownloadStream(_ context.Context, _ string, _ io.Writer) error { return nil }
+func (f *fakeStore) Head(_ context.Context, _ string) (*storage.ObjectInfo, error) {
+	if f.headErr != nil {
+		return nil, f.headErr
+	}
+	return &storage.ObjectInfo{Size: f.headSize}, nil
+}
+
+func TestVerifyUploadedObject(t *testing.T) {
+	const streamed = int64(100)
+	cases := []struct {
+		name        string
+		headSize    int64
+		headErr     error
+		uploadErr   error
+		wantErr     bool
+		wantSidecar bool
+	}{
+		{"exists + size match -> sidecar written, ok", 100, nil, nil, false, true},
+		{"head error -> error, no sidecar", 0, errors.New("no head"), nil, true, false},
+		{"size mismatch -> error, no sidecar", 99, nil, nil, true, false},
+		{"sidecar write fails -> error", 100, nil, errors.New("up fail"), true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &fakeStore{headSize: tc.headSize, headErr: tc.headErr, uploadErr: tc.uploadErr}
+			b := &pgArchiveBackend{store: fs, cfg: &config.AppConfig{PGSchema: "rearm", DumpPrefix: "p"}}
+			err := b.verifyUploadedObject(context.Background(), "p-arch.dump", streamed, "deadbeef")
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if fs.uploaded["p-arch.dump.sha256"] != tc.wantSidecar {
+				t.Errorf("sidecar written = %v, want %v", fs.uploaded["p-arch.dump.sha256"], tc.wantSidecar)
+			}
+		})
+	}
+}
 
 func TestRotateSQL(t *testing.T) {
 	got := rotateSQL("rearm", "audit", "audit_archive_20260719t120000z_deadbeef", "5s")

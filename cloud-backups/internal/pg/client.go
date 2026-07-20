@@ -84,6 +84,26 @@ func (c *Client) Restore(ctx context.Context, target string, in io.Reader) error
 	return nil
 }
 
+// RestoreList runs `pg_restore -l` reading a custom-format archive from in,
+// discarding the listed TOC. It validates that the archive is a structurally
+// valid, non-truncated, restorable pg_dump (it parses the header + TOC + offset
+// table) WITHOUT touching any database. Returns an error if the archive is
+// invalid/corrupt/truncated. No DB connection is used.
+func (c *Client) RestoreList(ctx context.Context, in io.Reader) error {
+	cmd := exec.CommandContext(ctx, "pg_restore", "-l")
+	cmd.Stdin = in
+	cmd.Env = os.Environ()
+	cmd.Stdout = io.Discard
+
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pg_restore -l failed (archive not a valid restorable dump): %w | stderr: %s", err, strings.TrimSpace(stderrBuf.String()))
+	}
+	return nil
+}
+
 // PreflightCheck runs pg_isready to probe connectivity before the full pipeline.
 func (c *Client) PreflightCheck(ctx context.Context, target string) error {
 	args := []string{

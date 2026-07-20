@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
@@ -15,8 +16,9 @@ import (
 )
 
 type s3Provider struct {
-	client *s3.Client
-	bucket string
+	client      *s3.Client
+	bucket      string
+	useChecksum bool
 }
 
 func newS3Provider(ctx context.Context, cfg *Config) (*s3Provider, error) {
@@ -31,20 +33,27 @@ func newS3Provider(ctx context.Context, cfg *Config) (*s3Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
-	return &s3Provider{client: s3.NewFromConfig(awsCfg), bucket: cfg.AWSBucket}, nil
+	// Only ask S3 to verify a SHA-256 per part on real AWS. A custom endpoint
+	// (MinIO/Ceph/R2/B2/Wasabi via AWS_ENDPOINT_URL[_S3]) may reject the SHA-256
+	// composite/streaming-trailer checksum, which would break EVERY upload mode --
+	// so we don't force it there.
+	customEndpoint := os.Getenv("AWS_ENDPOINT_URL_S3") != "" || os.Getenv("AWS_ENDPOINT_URL") != ""
+	return &s3Provider{client: s3.NewFromConfig(awsCfg), bucket: cfg.AWSBucket, useChecksum: !customEndpoint}, nil
 }
 
 func (p *s3Provider) UploadStream(ctx context.Context, remotePath string, reader io.Reader) error {
 	tm := transfermanager.New(p.client)
-	_, err := tm.UploadObject(ctx, &transfermanager.UploadObjectInput{
+	in := &transfermanager.UploadObjectInput{
 		Bucket: aws.String(p.bucket),
 		Key:    aws.String(remotePath),
 		Body:   reader,
-		// Have S3 verify a SHA-256 of every (multipart) part server-side and refuse
-		// the object on any mismatch, so a "completed" upload is cryptographically
-		// integrity-checked -- at ~zero cost, on all backup modes.
-		ChecksumAlgorithm: tmtypes.ChecksumAlgorithmSha256,
-	})
+	}
+	if p.useChecksum {
+		// S3 verifies a SHA-256 of every (multipart) part server-side and refuses
+		// the object on any mismatch -- a "completed" upload is integrity-checked.
+		in.ChecksumAlgorithm = tmtypes.ChecksumAlgorithmSha256
+	}
+	_, err := tm.UploadObject(ctx, in)
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("upload interrupted: %w", err)
 	}
@@ -60,11 +69,10 @@ func (p *s3Provider) Head(ctx context.Context, remotePath string) (*ObjectInfo, 
 	if err != nil {
 		return nil, fmt.Errorf("head object %q failed: %w", remotePath, err)
 	}
-	var size int64
-	if out.ContentLength != nil {
-		size = *out.ContentLength
+	if out.ContentLength == nil {
+		return nil, fmt.Errorf("head object %q returned no ContentLength", remotePath)
 	}
-	return &ObjectInfo{Size: size}, nil
+	return &ObjectInfo{Size: *out.ContentLength}, nil
 }
 
 func (p *s3Provider) DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error {

@@ -44,6 +44,7 @@ type AppConfig struct {
 	AllowUnencrypted bool   `mapstructure:"allow-unencrypted"`
 	NoDrop           bool   `mapstructure:"no-drop"`
 	VerifyRestore    bool   `mapstructure:"verify-restore"`
+	DropPending      bool   `mapstructure:"drop-pending"`
 
 	// Shared fields
 	StorageType         string        `mapstructure:"backup-storage-type"`
