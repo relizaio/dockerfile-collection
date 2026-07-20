@@ -567,12 +567,12 @@ DO $ROT$
 DECLARE r record;
 BEGIN
   FOR r IN SELECT conname FROM pg_constraint WHERE conrelid = '%[1]s.%[3]s'::regclass LOOP
-    EXECUTE format('ALTER TABLE %[1]s.%[3]s RENAME CONSTRAINT %%I TO %%I', r.conname, left(r.conname || '_arch', 63));
+    EXECUTE format('ALTER TABLE %[1]s.%[3]s RENAME CONSTRAINT %%I TO %%I', r.conname, left(r.conname, 55) || '_' || substr(md5(r.conname), 1, 7));
   END LOOP;
   FOR r IN SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
            WHERE i.indrelid = '%[1]s.%[3]s'::regclass
              AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid) LOOP
-    EXECUTE format('ALTER INDEX %[1]s.%%I RENAME TO %%I', r.relname, left(r.relname || '_arch', 63));
+    EXECUTE format('ALTER INDEX %[1]s.%%I RENAME TO %%I', r.relname, left(r.relname, 55) || '_' || substr(md5(r.relname), 1, 7));
   END LOOP;
 END
 $ROT$;
