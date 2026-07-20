@@ -85,6 +85,37 @@ func TestRotateSQL(t *testing.T) {
 	}
 }
 
+// The rename-aside suffix MUST derive from the (unique) archive name, not the
+// constant original constraint/index name -- otherwise two coexisting un-dropped
+// archives (e.g. a --no-drop staging re-run) collide on `audit_pkey_<sfx>` and the
+// second rotation fails with `relation "audit_pkey_..." already exists`.
+func TestRotateSQL_RenameSuffixIsPerArchive(t *testing.T) {
+	a1 := rotateSQL("rearm", "audit", "audit_archive_20260720t100100z_05196fcc", "5s")
+	a2 := rotateSQL("rearm", "audit", "audit_archive_20260720t112820z_d2337e60", "5s")
+
+	// The suffix is md5(archive-name), so it must reference the archive name, not
+	// the original constraint name.
+	if !strings.Contains(a1, "substr(md5('audit_archive_20260720t100100z_05196fcc'), 1, 8)") {
+		t.Errorf("rename suffix not derived from archive name in:\n%s", a1)
+	}
+	if strings.Contains(a1, "md5(r.conname)") || strings.Contains(a1, "md5(r.relname)") {
+		t.Errorf("rename suffix still derived from the (constant) constraint/index name:\n%s", a1)
+	}
+	// Two different archives must produce different DECLARE-d suffixes so their
+	// renamed constraints/indexes never collide schema-wide.
+	sfx := func(s string) string {
+		const marker = "DECLARE sfx text := "
+		i := strings.Index(s, marker)
+		if i < 0 {
+			t.Fatalf("no suffix declaration in:\n%s", s)
+		}
+		return s[i : i+len(marker)+60]
+	}
+	if sfx(a1) == sfx(a2) {
+		t.Errorf("two distinct archives produced the SAME rename suffix expression:\n%s", sfx(a1))
+	}
+}
+
 func TestKeepCopySQL_InstancesOnly(t *testing.T) {
 	cols := []string{"uuid", "entity_name", "revision_record_data"}
 	got := keepCopySQL("rearm", "audit", "audit_archive_x", 0, "5s", cols)
