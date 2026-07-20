@@ -110,3 +110,33 @@ func TestMonitor_PercentAndETA_WhenTotalKnown(t *testing.T) {
 		t.Errorf("expected eta_approx when total is known; got:\n%s", out)
 	}
 }
+
+func TestMonitor_PreciseAndEvent_UsesExactLabelsAndCustomEvent(t *testing.T) {
+	buf := &syncBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	defer slog.SetDefault(old)
+
+	var counter atomic.Int64
+	m := New(&counter, "verify-restore:key", 20*time.Millisecond, 1000).
+		SetEvent("verify_download_in_progress").SetPrecise()
+	m.Start(context.Background())
+	counter.Store(400)
+	time.Sleep(30 * time.Millisecond)
+	counter.Store(700)
+	time.Sleep(30 * time.Millisecond)
+	m.Stop()
+	time.Sleep(30 * time.Millisecond) // let the goroutine exit before reading
+
+	out := buf.String()
+	if !strings.Contains(out, "verify_download_in_progress") {
+		t.Errorf("expected custom event msg; got:\n%s", out)
+	}
+	// Precise mode uses exact labels, not the _approx variants.
+	if !strings.Contains(out, "percent=") || strings.Contains(out, "percent_approx") {
+		t.Errorf("expected exact percent= (not percent_approx) in precise mode; got:\n%s", out)
+	}
+	if !strings.Contains(out, "eta=") || strings.Contains(out, "eta_approx") {
+		t.Errorf("expected exact eta= (not eta_approx) in precise mode; got:\n%s", out)
+	}
+}
