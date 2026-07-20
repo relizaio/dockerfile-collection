@@ -2,6 +2,9 @@ package progress
 
 import (
 	"context"
+	"log/slog"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -9,7 +12,7 @@ import (
 
 func TestNew_FieldsSet(t *testing.T) {
 	var counter atomic.Int64
-	m := New(&counter, "test/path", 5*time.Second)
+	m := New(&counter, "test/path", 5*time.Second, 0)
 	if m.bytesRead != &counter {
 		t.Error("bytesRead pointer not set correctly")
 	}
@@ -26,7 +29,7 @@ func TestNew_FieldsSet(t *testing.T) {
 
 func TestMonitor_StartStop_NoPanic(t *testing.T) {
 	var counter atomic.Int64
-	m := New(&counter, "target", 100*time.Millisecond)
+	m := New(&counter, "target", 100*time.Millisecond, 0)
 	ctx := context.Background()
 	m.Start(ctx)
 	// Let the goroutine tick at least once
@@ -38,7 +41,7 @@ func TestMonitor_StartStop_NoPanic(t *testing.T) {
 
 func TestMonitor_ContextCancel_ExitsGoroutine(t *testing.T) {
 	var counter atomic.Int64
-	m := New(&counter, "target", 50*time.Millisecond)
+	m := New(&counter, "target", 50*time.Millisecond, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.Start(ctx)
 	time.Sleep(30 * time.Millisecond)
@@ -51,7 +54,7 @@ func TestMonitor_ContextCancel_ExitsGoroutine(t *testing.T) {
 
 func TestMonitor_ByteProgressLogged(t *testing.T) {
 	var counter atomic.Int64
-	m := New(&counter, "target", 20*time.Millisecond)
+	m := New(&counter, "target", 20*time.Millisecond, 0)
 	ctx := context.Background()
 	m.Start(ctx)
 
@@ -65,10 +68,45 @@ func TestMonitor_ByteProgressLogged(t *testing.T) {
 func TestMonitor_StallWarning(t *testing.T) {
 	var counter atomic.Int64
 	counter.Store(512) // non-zero but won't change → stall warning path
-	m := New(&counter, "target", 20*time.Millisecond)
+	m := New(&counter, "target", 20*time.Millisecond, 0)
 	ctx := context.Background()
 	m.Start(ctx)
 	time.Sleep(60 * time.Millisecond)
 	m.Stop()
 	// Verifies stall code path executes without panic
+}
+
+// syncBuf is a concurrency-safe writer for capturing slog output from the monitor
+// goroutine.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+func TestMonitor_PercentAndETA_WhenTotalKnown(t *testing.T) {
+	buf := &syncBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	defer slog.SetDefault(old)
+
+	var counter atomic.Int64
+	m := New(&counter, "target", 20*time.Millisecond, 1000) // total known
+	m.Start(context.Background())
+	counter.Store(400)
+	time.Sleep(30 * time.Millisecond)
+	counter.Store(700)
+	time.Sleep(30 * time.Millisecond)
+	m.Stop()
+	time.Sleep(30 * time.Millisecond) // let the goroutine exit before reading
+
+	out := buf.String()
+	if !strings.Contains(out, "percent_approx") {
+		t.Errorf("expected percent_approx when total is known; got:\n%s", out)
+	}
+	if !strings.Contains(out, "eta_approx") {
+		t.Errorf("expected eta_approx when total is known; got:\n%s", out)
+	}
 }

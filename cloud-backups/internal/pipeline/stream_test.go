@@ -83,7 +83,7 @@ func TestRunWithRetry_SuccessFirstAttempt(t *testing.T) {
 	src := &mockSource{backupFn: writePayload(payload)}
 	store := captureStorage(&captured)
 
-	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false)
+	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false, 0)
 
 	if tracker.GetTotal() != 1 {
 		t.Errorf("Total: got %d want 1", tracker.GetTotal())
@@ -113,7 +113,7 @@ func TestRunWithRetry_RetryThenSuccess(t *testing.T) {
 	var captured bytes.Buffer
 	store := captureStorage(&captured)
 
-	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false)
+	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false, 0)
 
 	if tracker.GetFailedCount() != 0 {
 		t.Errorf("expected 0 failures after eventual success, got %d", tracker.GetFailedCount())
@@ -134,7 +134,7 @@ func TestRunWithRetry_AllAttemptsFail(t *testing.T) {
 		},
 	}
 
-	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false)
+	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false, 0)
 
 	if tracker.GetFailedCount() != 1 {
 		t.Errorf("Failed: got %d want 1", tracker.GetFailedCount())
@@ -158,7 +158,7 @@ func TestRunWithRetry_FastFailOnUnauthorized(t *testing.T) {
 		},
 	}
 
-	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false)
+	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false, 0)
 
 	if atomic.LoadInt32(&callCount) != 1 {
 		t.Errorf("expected exactly 1 attempt on unauthorized error, got %d", callCount)
@@ -182,7 +182,7 @@ func TestRunWithRetry_SkipOnRepositoryNotFound(t *testing.T) {
 		},
 	}
 
-	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false)
+	RunWithRetry(context.Background(), src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false, 0)
 
 	if tracker.GetSkippedCount() != 1 {
 		t.Errorf("Skipped: got %d want 1", tracker.GetSkippedCount())
@@ -211,7 +211,7 @@ func TestRunWithRetry_ContextCancelledBeforeStart(t *testing.T) {
 		},
 	}
 
-	RunWithRetry(ctx, src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false)
+	RunWithRetry(ctx, src, store, "target", "prefix", ".dump", nil, tracker, 30*time.Second, false, 0)
 
 	// Either the job was skipped (ctx already done) or it ran once but was cancelled mid-way.
 	// The key invariant: no panics and tracker totals are sane.
@@ -240,7 +240,7 @@ func TestOCI_NoEncryption_UploadIsGzipped(t *testing.T) {
 	store := captureStorage(&captured)
 	mods := []WriterModifier{WithGzip()}
 
-	RunWithRetry(context.Background(), src, store, "repo/path", "oci-backup", ".tar.gz", mods, tracker, 30*time.Second, false)
+	RunWithRetry(context.Background(), src, store, "repo/path", "oci-backup", ".tar.gz", mods, tracker, 30*time.Second, false, 0)
 
 	if tracker.GetFailedCount() != 0 {
 		t.Fatalf("backup failed unexpectedly")
@@ -261,7 +261,7 @@ func TestPG_NoEncryption_UploadIsNotGzipped(t *testing.T) {
 	// PG path: empty modifier list
 	mods := []WriterModifier{}
 
-	RunWithRetry(context.Background(), src, store, "mydb", "pg-backup", ".dump", mods, tracker, 30*time.Second, false)
+	RunWithRetry(context.Background(), src, store, "mydb", "pg-backup", ".dump", mods, tracker, 30*time.Second, false, 0)
 
 	if tracker.GetFailedCount() != 0 {
 		t.Fatalf("backup failed unexpectedly")

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -323,9 +324,21 @@ func (b *pgArchiveBackend) BackupAndVerify(ctx context.Context, archive string, 
 	dumpClient := &pg.Client{Host: b.cfg.PGHost, Port: b.cfg.PGPort, Database: b.cfg.PGDatabase, User: b.cfg.PGUser, Table: fmt.Sprintf("%s.%s", b.cfg.PGSchema, archive)}
 	backupName := fmt.Sprintf("%s-%s", b.cfg.DumpPrefix, archive)
 
+	// Estimate the dump size from the table's on-disk size so the upload progress can
+	// report an approximate percent + ETA and the watcher has a size expectation up
+	// front. pg_table_size = heap + TOAST (no indexes); the compressed dump is usually
+	// somewhat smaller, so this is an approximate upper bound.
+	var totalHint int64
+	if rows, err := b.QueryRows(ctx, fmt.Sprintf("SELECT pg_table_size('%s.%s')", b.cfg.PGSchema, archive)); err == nil && len(rows) == 1 {
+		if n, perr := strconv.ParseInt(rows[0], 10, 64); perr == nil {
+			totalHint = n
+			slog.Info("archive_backup_starting", "archive", archive, "estimated_size", stats.FormatBytes(n), "note", "estimate from table size; the compressed/encrypted object may differ")
+		}
+	}
+
 	hp := &hashingProvider{Provider: b.store}
 	successBefore := tracker.GetSuccess()
-	pipeline.RunWithRetry(ctx, dumpClient, hp, b.cfg.PGDatabase, backupName, nameSuffix, writerMods, tracker, b.cfg.Timeout, true)
+	pipeline.RunWithRetry(ctx, dumpClient, hp, b.cfg.PGDatabase, backupName, nameSuffix, writerMods, tracker, b.cfg.Timeout, true, totalHint)
 	if tracker.GetSuccess() <= successBefore {
 		return fmt.Errorf("upload did not complete for %s", key)
 	}
