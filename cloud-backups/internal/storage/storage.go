@@ -8,10 +8,19 @@ import (
 
 const MaxRetries = 5
 
+// ObjectInfo is the subset of stored-object metadata callers need to verify an
+// upload landed intact without downloading it.
+type ObjectInfo struct {
+	Size int64
+}
+
 // Provider is the interface all cloud storage backends must implement.
 type Provider interface {
 	UploadStream(ctx context.Context, remotePath string, reader io.Reader) error
 	DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error
+	// Head returns object metadata (size) without downloading the body, for a
+	// cheap post-upload existence/size check.
+	Head(ctx context.Context, remotePath string) (*ObjectInfo, error)
 }
 
 // Config holds credentials passed down from the CLI.

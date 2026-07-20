@@ -55,12 +55,28 @@ func (p *azureProvider) UploadStream(ctx context.Context, remotePath string, rea
 	return err
 }
 
+// Head returns the stored blob's size via GetProperties (no body download).
+func (p *azureProvider) Head(ctx context.Context, remotePath string) (*ObjectInfo, error) {
+	blobClient := p.client.ServiceClient().NewContainerClient(p.container).NewBlobClient(remotePath)
+	props, err := blobClient.GetProperties(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get properties for %q failed: %w", remotePath, err)
+	}
+	if props.ContentLength == nil {
+		return nil, fmt.Errorf("get properties for %q returned no ContentLength", remotePath)
+	}
+	return &ObjectInfo{Size: *props.ContentLength}, nil
+}
+
 func (p *azureProvider) DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error {
 	stream, err := p.client.DownloadStream(ctx, p.container, remotePath, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start Azure download: %w", err)
 	}
-	defer stream.Body.Close()
-	_, err = io.Copy(writer, stream.Body)
+	// NewRetryReader reconnects mid-stream on a transient drop, so a whole-blob
+	// read (e.g. verify-restore) is not killed by the client's per-try timeout.
+	body := stream.NewRetryReader(ctx, &azblob.RetryReaderOptions{MaxRetries: MaxRetries})
+	defer body.Close()
+	_, err = io.Copy(writer, body)
 	return err
 }
