@@ -448,7 +448,7 @@ func TestValidatePGAuditRotate(t *testing.T) {
 	base := func() *AppConfig {
 		return &AppConfig{
 			PGHost: "h", PGDatabase: "d", PGUser: "u",
-			PGSchema: "rearm", AuditTable: "audit", KeepTailDays: 0, LockTimeout: "5s",
+			PGSchema: "rearm", AuditTable: "audit", RetentionDays: 30, LockTimeout: "5s",
 			EncryptionPassword: "pw",
 			StorageType:        "s3", AWSBucket: "b", AWSRegion: "r",
 			AWSAccessKeyID: "k", AWSSecretAccessKey: "s",
@@ -466,13 +466,13 @@ func TestValidatePGAuditRotate(t *testing.T) {
 		t.Errorf("explicit --allow-unencrypted should pass: %v", err)
 	}
 	bad := map[string]func(*AppConfig){
-		"bad schema":   func(c *AppConfig) { c.PGSchema = "rea rm" },
-		"bad table":    func(c *AppConfig) { c.AuditTable = "audit;drop" },
-		"long table":   func(c *AppConfig) { c.AuditTable = "a_very_long_audit_table_name_wont_fit" },
-		"neg tail":     func(c *AppConfig) { c.KeepTailDays = -1 },
-		"empty lock":   func(c *AppConfig) { c.LockTimeout = "" },
-		"missing db":   func(c *AppConfig) { c.PGDatabase = "" },
-		"missing buck": func(c *AppConfig) { c.AWSBucket = "" },
+		"bad schema":    func(c *AppConfig) { c.PGSchema = "rea rm" },
+		"bad table":     func(c *AppConfig) { c.AuditTable = "audit;drop" },
+		"long table":    func(c *AppConfig) { c.AuditTable = "a_very_long_audit_table_name_wont_fit" },
+		"neg retention": func(c *AppConfig) { c.RetentionDays = -1 },
+		"empty lock":    func(c *AppConfig) { c.LockTimeout = "" },
+		"missing db":    func(c *AppConfig) { c.PGDatabase = "" },
+		"missing buck":  func(c *AppConfig) { c.AWSBucket = "" },
 	}
 	for name, mut := range bad {
 		t.Run(name, func(t *testing.T) {

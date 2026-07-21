@@ -20,16 +20,17 @@ func init() {
 	pgCmd.PersistentFlags().String("pg-port", "5432", "PostgreSQL port (ENV: PG_PORT)")
 	pgCmd.PersistentFlags().String("pg-database", "", "Database name (ENV: PG_DATABASE)")
 	pgCmd.PersistentFlags().String("pg-user", "", "PostgreSQL username (ENV: PG_USER)")
+	pgCmd.PersistentFlags().String("exclude-table", "", "pg backup: comma-separated pg_dump --exclude-table patterns (wildcards ok, e.g. 'rearm.audit_archive_*') to omit from a whole-DB backup -- e.g. the retained audit archive tables, which have their own permanent-bucket backups (ENV: EXCLUDE_TABLE)")
 
 	// audit-rotate specific flags
 	pgCmd.PersistentFlags().String("pg-schema", "rearm", "Schema containing the audit table, for audit-rotate (ENV: PG_SCHEMA)")
 	pgCmd.PersistentFlags().String("audit-table", "audit", "Audit table name, for audit-rotate (ENV: AUDIT_TABLE)")
-	pgCmd.PersistentFlags().Int("keep-tail-days", 0, "audit-rotate: also keep audit rows newer than N days in the live table (0 = readers only) (ENV: KEEP_TAIL_DAYS)")
+	pgCmd.PersistentFlags().Int("audit-retention-days", 30, "audit-rotate: keep each sealed archive on disk (queryable by name for ops inspection) until it is older than N days, then DROP it whole on a later run (0 = drop on the next run) (ENV: AUDIT_RETENTION_DAYS)")
 	pgCmd.PersistentFlags().String("lock-timeout", "5s", "audit-rotate: lock_timeout for the rename step; on contention the rotate rolls back and retries next run (ENV: LOCK_TIMEOUT)")
 	pgCmd.PersistentFlags().Bool("allow-unencrypted", false, "audit-rotate: allow writing an UNENCRYPTED dump to the permanent bucket when no --encryption-password is set (ENV: ALLOW_UNENCRYPTED)")
-	pgCmd.PersistentFlags().Bool("no-drop", false, "audit-rotate: rotate + back up + verify, but do NOT drop the archive (leave it for manual confirmation, then a later run drops it) (ENV: NO_DROP)")
-	pgCmd.PersistentFlags().Bool("verify-restore", false, "audit-rotate: before dropping, re-download the archive, decrypt it, run pg_restore -l (proves it's a restorable dump), and match its SHA-256 (full re-download) (ENV: VERIFY_RESTORE)")
-	pgCmd.PersistentFlags().Bool("drop-pending", false, "audit-rotate: do NOT rotate; instead verify each already-backed-up leftover archive against its stored .sha256 sidecar (+ pg_restore -l) and drop it. The confirm step after a --no-drop run. (ENV: DROP_PENDING)")
+	pgCmd.PersistentFlags().Bool("verify-restore", false, "audit-rotate: before an aged-out drop, re-download the archive, decrypt it, run pg_restore -l (proves it's a restorable dump), and match its SHA-256 (full re-download). Default is a cheap existence gate (ENV: VERIFY_RESTORE)")
+	pgCmd.PersistentFlags().Bool("drain-backlog", false, "audit-rotate: back up + drop the archive created THIS run immediately, regardless of retention age. Set only on the first/cutover run to reclaim the historical backlog now; retention accumulates from the next run. Keep false for the recurring cron. (ENV: DRAIN_BACKLOG)")
+	pgCmd.PersistentFlags().Bool("drop-instance-rows", false, "audit-rotate: proceed even if the audit table holds frozen entity_name='instances' rows (still read by the app but never re-written). Without this the run refuses when such rows exist. Setting it does NOT lose data (the rows are backed up to the permanent bucket like any archive) but the app's instance-revision reads return empty once those rows age out of the DB -- a conscious cutover choice. (ENV: DROP_INSTANCE_ROWS)")
 
 	mustBindPFlag := func(key, flagName string) {
 		if err := viper.BindPFlag(key, pgCmd.PersistentFlags().Lookup(flagName)); err != nil {
@@ -42,10 +43,11 @@ func init() {
 	mustBindPFlag("pg-user", "pg-user")
 	mustBindPFlag("pg-schema", "pg-schema")
 	mustBindPFlag("audit-table", "audit-table")
-	mustBindPFlag("keep-tail-days", "keep-tail-days")
+	mustBindPFlag("audit-retention-days", "audit-retention-days")
 	mustBindPFlag("lock-timeout", "lock-timeout")
 	mustBindPFlag("allow-unencrypted", "allow-unencrypted")
-	mustBindPFlag("no-drop", "no-drop")
 	mustBindPFlag("verify-restore", "verify-restore")
-	mustBindPFlag("drop-pending", "drop-pending")
+	mustBindPFlag("drain-backlog", "drain-backlog")
+	mustBindPFlag("drop-instance-rows", "drop-instance-rows")
+	mustBindPFlag("exclude-table", "exclude-table")
 }

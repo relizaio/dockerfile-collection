@@ -9,6 +9,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 )
 
 const (
@@ -55,12 +56,24 @@ func (p *azureProvider) UploadStream(ctx context.Context, remotePath string, rea
 	return err
 }
 
+// mapAzureNotFound maps a GetProperties error to ErrNotFound when it is a definitive
+// missing blob (404 / BlobNotFound), so callers can distinguish a confirmed absence
+// from a transient/credential error. Any other error is passed through as a generic
+// failure. Azure sets the x-ms-error-code header on a HEAD 404, which bloberror.HasCode
+// reads off the *azcore.ResponseError.
+func mapAzureNotFound(remotePath string, err error) error {
+	if bloberror.HasCode(err, bloberror.BlobNotFound) {
+		return fmt.Errorf("get properties for %q: %w", remotePath, ErrNotFound)
+	}
+	return fmt.Errorf("get properties for %q failed: %w", remotePath, err)
+}
+
 // Head returns the stored blob's size via GetProperties (no body download).
 func (p *azureProvider) Head(ctx context.Context, remotePath string) (*ObjectInfo, error) {
 	blobClient := p.client.ServiceClient().NewContainerClient(p.container).NewBlobClient(remotePath)
 	props, err := blobClient.GetProperties(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("get properties for %q failed: %w", remotePath, err)
+		return nil, mapAzureNotFound(remotePath, err)
 	}
 	if props.ContentLength == nil {
 		return nil, fmt.Errorf("get properties for %q returned no ContentLength", remotePath)

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,6 +50,7 @@ func runPGBackup() error {
 		PGPort:              pgPort,
 		PGDatabase:          viper.GetString("pg-database"),
 		PGUser:              viper.GetString("pg-user"),
+		ExcludeTable:        viper.GetString("exclude-table"),
 		StorageType:         viper.GetString("backup-storage-type"),
 		EncryptionPassword:  viper.GetString("encryption-password"),
 		DumpPrefix:          viper.GetString("dump-prefix"),
@@ -98,6 +100,14 @@ func runPGBackup() error {
 		Port:     cfg.PGPort,
 		Database: cfg.PGDatabase,
 		User:     cfg.PGUser,
+	}
+	// Comma-separated --exclude-table patterns (e.g. the retained audit archive
+	// tables, which have their own permanent-bucket backups) omitted from the
+	// whole-DB dump.
+	for _, pat := range strings.Split(cfg.ExcludeTable, ",") {
+		if pat = strings.TrimSpace(pat); pat != "" {
+			pgClient.ExcludeTables = append(pgClient.ExcludeTables, pat)
+		}
 	}
 	slog.Info("running_preflight_check", "host", cfg.PGHost, "port", cfg.PGPort)
 	if err := pgClient.PreflightCheck(ctx, cfg.PGDatabase); err != nil {
