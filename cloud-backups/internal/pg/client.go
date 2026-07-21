@@ -19,6 +19,36 @@ type Client struct {
 	// instead of dumping the whole database. Used by the audit-rotate mode to dump
 	// a rotated-out archive table. Empty means whole-database dump (default).
 	Table string
+	// ExcludeTables, when non-empty, are pg_dump --exclude-table patterns (each may
+	// use wildcards, e.g. rearm.audit_archive_*) omitted from a whole-database Backup.
+	// Used to keep the retained audit archive tables out of the regular full-DB backup
+	// (they have their own permanent-bucket backups) and to avoid a DROP-vs-pg_dump
+	// race against a table the rotation may drop mid-dump. Ignored when Table is set.
+	ExcludeTables []string
+}
+
+// dumpArgs builds the pg_dump argv for a dump of database. When Table is set, only
+// that table is dumped (-t) and ExcludeTables is ignored; otherwise each non-empty
+// ExcludeTables pattern is passed as a discrete --exclude-table=<pat> argv element
+// (no shell, so a leading '-' in a pattern can't be reparsed as a flag). The
+// database name is always last. Extracted for unit-testability.
+func (c *Client) dumpArgs(database string) []string {
+	args := []string{
+		"-Fc",
+		"-U", c.User,
+		"-h", c.Host,
+		"-p", c.port(),
+	}
+	if c.Table != "" {
+		args = append(args, "-t", c.Table)
+	} else {
+		for _, pat := range c.ExcludeTables {
+			if pat != "" {
+				args = append(args, "--exclude-table="+pat)
+			}
+		}
+	}
+	return append(args, database)
 }
 
 // Backup runs pg_dump -Fc and streams its stdout to out.
@@ -30,17 +60,7 @@ func (c *Client) Backup(ctx context.Context, target string, out io.Writer) error
 	if database == "" {
 		database = c.Database
 	}
-	args := []string{
-		"-Fc",
-		"-U", c.User,
-		"-h", c.Host,
-		"-p", c.port(),
-	}
-	if c.Table != "" {
-		args = append(args, "-t", c.Table)
-	}
-	args = append(args, database)
-	cmd := exec.CommandContext(ctx, "pg_dump", args...)
+	cmd := exec.CommandContext(ctx, "pg_dump", c.dumpArgs(database)...)
 	cmd.Stdout = out
 	cmd.Env = os.Environ()
 
@@ -127,7 +147,7 @@ func (c *Client) PreflightCheck(ctx context.Context, target string) error {
 // Exec runs a (possibly multi-statement) SQL script via psql with ON_ERROR_STOP,
 // reading the script from stdin so multi-statement DDL and DO-blocks work reliably.
 // PGPASSWORD must be set in the environment by the caller. Used by the audit-rotate
-// mode for the rotate/keep-copy/drop steps.
+// mode for the rotate/drop steps.
 func (c *Client) Exec(ctx context.Context, sql string) error {
 	args := []string{
 		"-v", "ON_ERROR_STOP=1",

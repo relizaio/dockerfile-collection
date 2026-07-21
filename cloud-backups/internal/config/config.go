@@ -31,20 +31,21 @@ type AppConfig struct {
 	PlainHTTP           bool     `mapstructure:"plain-http"`
 
 	// PG fields
-	PGHost     string `mapstructure:"pg-host"`
-	PGPort     string `mapstructure:"pg-port"`
-	PGDatabase string `mapstructure:"pg-database"`
-	PGUser     string `mapstructure:"pg-user"`
+	PGHost       string `mapstructure:"pg-host"`
+	PGPort       string `mapstructure:"pg-port"`
+	PGDatabase   string `mapstructure:"pg-database"`
+	PGUser       string `mapstructure:"pg-user"`
+	ExcludeTable string `mapstructure:"exclude-table"`
 
 	// PG audit-rotate fields
 	PGSchema         string `mapstructure:"pg-schema"`
 	AuditTable       string `mapstructure:"audit-table"`
-	KeepTailDays     int    `mapstructure:"keep-tail-days"`
+	RetentionDays    int    `mapstructure:"audit-retention-days"`
 	LockTimeout      string `mapstructure:"lock-timeout"`
 	AllowUnencrypted bool   `mapstructure:"allow-unencrypted"`
-	NoDrop           bool   `mapstructure:"no-drop"`
 	VerifyRestore    bool   `mapstructure:"verify-restore"`
-	DropPending      bool   `mapstructure:"drop-pending"`
+	DrainBacklog     bool   `mapstructure:"drain-backlog"`
+	DropInstanceRows bool   `mapstructure:"drop-instance-rows"`
 
 	// Shared fields
 	StorageType         string        `mapstructure:"backup-storage-type"`
@@ -187,12 +188,12 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 	}
 	// The archive name is "<audit>_archive_<16-char utc>_<8 hex>" = <audit>+34 chars.
 	// Postgres truncates identifiers at 63 bytes; truncation would desync the Go name
-	// from the stored name and wedge keep-copy/drop/recovery. Bound the input.
+	// from the stored name and wedge drop/recovery. Bound the input.
 	if len(c.AuditTable) > 63-34 {
 		return fmt.Errorf("--audit-table / AUDIT_TABLE too long (%d chars); max 29 so the archive name stays within Postgres's 63-byte identifier limit", len(c.AuditTable))
 	}
-	if c.KeepTailDays < 0 {
-		return fmt.Errorf("--keep-tail-days / KEEP_TAIL_DAYS must be >= 0, got %d", c.KeepTailDays)
+	if c.RetentionDays < 0 {
+		return fmt.Errorf("--audit-retention-days / AUDIT_RETENTION_DAYS must be >= 0, got %d", c.RetentionDays)
 	}
 	if !pgDuration.MatchString(c.LockTimeout) {
 		return fmt.Errorf("--lock-timeout / LOCK_TIMEOUT must be a PostgreSQL duration like 5s or 500ms, got %q", c.LockTimeout)

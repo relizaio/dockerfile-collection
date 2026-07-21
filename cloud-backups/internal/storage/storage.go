@@ -2,11 +2,18 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 )
 
 const MaxRetries = 5
+
+// ErrNotFound is returned (wrapped) by Head when the object definitively does not
+// exist. Callers use errors.Is(err, ErrNotFound) to distinguish a confirmed absence
+// (safe to treat as "not backed up") from a transient/ambiguous error (which must
+// NOT be read as absence -- e.g. before an irreversible DROP).
+var ErrNotFound = errors.New("object not found")
 
 // ObjectInfo is the subset of stored-object metadata callers need to verify an
 // upload landed intact without downloading it.

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,19 +31,24 @@ import (
 
 var pgAuditRotateCmd = &cobra.Command{
 	Use:   "audit-rotate",
-	Short: "Rotate a write-only audit table: back up + drop old rows, reclaim disk, keep readers hot",
+	Short: "Rotate a write-only audit table: back up, retain by age, drop, reclaim disk",
 	Long: `audit-rotate frees disk held by a large, append-only audit table without a
 partitioning migration or any application change.
 
-Each run: renames the live audit table aside, stands up a fresh identical table
-that immediately receives new writes (carrying forward only the rows anything
-reads -- INSTANCES plus an optional recent tail), streams the rotated-out archive
-to permanent-retention cloud storage, and only then DROPs it (instant reclaim).
-A failed run is safe: the rename rolls back on lock contention, and a leftover
-archive from an interrupted run is finished (backed up + dropped) on the next run.
+Each run has two passes. Pass 1 reconciles the archives left by prior runs: it
+finishes any interrupted backup (recovery, without re-dumping an already-uploaded
+one) and DROPs whole any archive older than the retention window (instant reclaim).
+Pass 2 rotates -- renames the live table aside as an immutable, timestamp-named
+archive and stands up a fresh EMPTY table for new writes -- then backs the archive
+up to permanent-retention cloud storage and RETAINS it (queryable by name for ops
+inspection) until a later run ages it out. --drain-backlog drops the new archive
+immediately, for the one-off cutover run that reclaims the historical backlog.
 
-Point --dump-prefix / the storage secret at a SEPARATE permanent-retention bucket,
-distinct from the regular DB backup bucket.`,
+A failed run is safe: the rename rolls back on lock contention; an archive is
+dropped only after its backup is verified present; and cross-run state lives only
+in Postgres (the archive tables) and the bucket (dump + .sha256 sidecar), never on
+the pod. Point --dump-prefix / the storage secret at a SEPARATE permanent-retention
+bucket, distinct from the regular DB backup bucket.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runPGAuditRotate(); err != nil {
 			os.Exit(1)
@@ -69,12 +75,12 @@ func runPGAuditRotate() error {
 		PGUser:              viper.GetString("pg-user"),
 		PGSchema:            viper.GetString("pg-schema"),
 		AuditTable:          viper.GetString("audit-table"),
-		KeepTailDays:        viper.GetInt("keep-tail-days"),
+		RetentionDays:       viper.GetInt("audit-retention-days"),
 		LockTimeout:         viper.GetString("lock-timeout"),
 		AllowUnencrypted:    viper.GetBool("allow-unencrypted"),
-		NoDrop:              viper.GetBool("no-drop"),
 		VerifyRestore:       viper.GetBool("verify-restore"),
-		DropPending:         viper.GetBool("drop-pending"),
+		DrainBacklog:        viper.GetBool("drain-backlog"),
+		DropInstanceRows:    viper.GetBool("drop-instance-rows"),
 		StorageType:         viper.GetString("backup-storage-type"),
 		EncryptionPassword:  viper.GetString("encryption-password"),
 		DumpPrefix:          viper.GetString("dump-prefix"),
@@ -134,53 +140,88 @@ func runPGAuditRotate() error {
 		return err
 	}
 
-	// The keep-copy's ON CONFLICT DO NOTHING is a silent no-op (and would duplicate
-	// INSTANCES rows on a recovery re-copy) unless a PK/UNIQUE constraint exists.
-	if uniq, err := pgClient.QueryRows(ctx, assertHasUniqueSQL(cfg.PGSchema, cfg.AuditTable)); err != nil {
-		slog.Error("unique_constraint_precheck_failed", "error", err.Error())
+	// Preflight: CREATE TABLE ... LIKE ... INCLUDING ALL does NOT reproduce table
+	// ownership or GRANTs, so any non-owner privilege on the audit table would be lost
+	// on the fresh table after the first rotation -- silently breaking any writer/reader
+	// that relies on that GRANT (a split-role deployment). Refuse rather than break
+	// audit writes in production. No-op when the rotate role owns the table and there
+	// are no extra grants (the common single-role case: relacl is owner-only/NULL).
+	if grantees, err := pgClient.QueryRows(ctx, nonOwnerGrantsSQL(cfg.PGSchema, cfg.AuditTable)); err != nil {
+		slog.Error("grants_precheck_failed", "error", err.Error())
 		return err
-	} else if len(uniq) == 0 {
-		err := fmt.Errorf("audit table %s.%s has no PRIMARY KEY / UNIQUE constraint; audit-rotate needs one for idempotent keep-copy", cfg.PGSchema, cfg.AuditTable)
-		slog.Error("unsupported_audit_table", "error", err.Error())
+	} else if len(grantees) > 0 {
+		err := fmt.Errorf("audit table %s.%s has GRANTs to non-owner role(s) [%s] that rotation (CREATE TABLE LIKE) will NOT reproduce; audit writes/reads via those roles would break after the first rotation. Make the rotate role the table owner (or remove those direct grants) before enabling audit-rotate", cfg.PGSchema, cfg.AuditTable, strings.Join(grantees, ", "))
+		slog.Error("non_owner_grants_refusing", "error", err.Error())
 		return err
 	}
 
-	start := time.Now()
+	// Preflight: this mode does NOT carry the frozen entity_name='instances' rows
+	// forward, but InstanceService still READS them (old-revision instance deep-links
+	// + 30-day analytics). Dropping is a deliberate, documented decision valid only
+	// where none exist. Enforce that precondition rather than silently destroying
+	// live-read data on a deployment that does have them; --drop-instance-rows is the
+	// conscious override. Only meaningful pre-rotation (the fresh table has none), so
+	// on the steady-state cron this is a cheap count returning 0.
+	if !cfg.DropInstanceRows {
+		rows, err := pgClient.QueryRows(ctx, countInstancesSQL(cfg.PGSchema, cfg.AuditTable))
+		if err != nil {
+			slog.Error("instances_precount_failed", "error", err.Error())
+			return err
+		}
+		// Proceed only on a definitive count of exactly 0; refuse on any rows OR an
+		// unexpected result shape (never assume zero from an ambiguous answer).
+		if len(rows) != 1 || rows[0] != "0" {
+			got := "an unexpected count result"
+			if len(rows) == 1 {
+				got = rows[0] + " entity_name='instances' row(s)"
+			}
+			err := fmt.Errorf("%s.%s returned %s still read by the app (InstanceService); audit-rotate does not carry them forward, so the app's instance-revision reads would return empty once they age out of the DB (the rows are still backed up to the permanent bucket). Set --drop-instance-rows to proceed as a conscious cutover", cfg.PGSchema, cfg.AuditTable, got)
+			slog.Error("instances_rows_present_refusing", "error", err.Error())
+			return err
+		}
+	}
+
+	now := time.Now()
 	tracker := stats.New()
 	backend := &pgArchiveBackend{Client: pgClient, store: storeProvider, cfg: cfg}
 
-	// --drop-pending: do NOT rotate. Verify each already-backed-up leftover archive
-	// against its stored sidecar (+ pg_restore -l) and drop the ones that verify.
-	// This is the confirm step after a --no-drop run -- it drops the exact object
-	// you inspected, without re-dumping.
-	if cfg.DropPending {
-		return dropPendingArchives(ctx, backend, cfg)
-	}
-
-	// 1. Recover any archives left behind by an interrupted prior run: finish them
-	//    (back up + drop) BEFORE creating a new one, so archives never pile up. A
-	//    single archive that can't be recovered (e.g. a live-table schema change it
-	//    can't be keep-copied into) is QUARANTINED (logged + surfaced at the end) but
-	//    must NOT halt the rotation -- otherwise one poison archive wedges the whole
-	//    disk-relief mechanism forever.
+	// Pass 1: reconcile the archives left by prior runs BEFORE creating a new one.
+	// For each, independently: (a) if its backup is not yet durable in the bucket,
+	// finish it (recovery -- an interrupted upload is re-dumped; an already-present
+	// one is NOT re-dumped); (b) if it has aged past the retention window, DROP it
+	// whole (O(1) reclaim); otherwise it is retained (a forensic safety buffer /
+	// inspectable-by-name for the retention window). A single archive that can't be
+	// reconciled is QUARANTINED (logged + surfaced at the end) but must NOT halt the
+	// run -- one poison archive can't be allowed to wedge disk relief forever.
 	leftovers, err := pgClient.QueryRows(ctx, listArchivesSQL(cfg.PGSchema, cfg.AuditTable))
 	if err != nil {
 		slog.Error("list_pending_archives_failed", "error", err.Error())
 		return err
 	}
-	quarantined := 0
-	for _, archive := range leftovers {
-		slog.Info("recovering_pending_archive", "archive", archive)
-		if err := backupAndDropArchive(ctx, backend, cfg, archive, tracker); err != nil {
-			slog.Error("recover_pending_archive_quarantined", "archive", archive, "error", err.Error())
+	quarantined, dropped, recovered, retained := 0, 0, 0, 0
+	for _, leftover := range leftovers {
+		rec, drp, rerr := reconcileArchive(ctx, backend, cfg, leftover, now, tracker)
+		if rerr != nil {
+			slog.Error("reconcile_archive_quarantined", "archive", leftover, "error", rerr.Error())
 			quarantined++
+			continue
+		}
+		if rec {
+			recovered++
+		}
+		if drp {
+			dropped++
+		} else {
+			retained++
 		}
 	}
 
-	// 2. Rotate: rename the live table aside and stand up a fresh one (fail-safe on
-	//    lock contention). The read set is carried forward inside backupAndDropArchive
-	//    (step 3), so it also runs on the recovery path above.
-	archive, err := newArchiveName(cfg.AuditTable, time.Now())
+	// Pass 2: rotate -- rename the live table aside and stand up a fresh EMPTY one
+	// (fail-safe on lock contention). The new archive is backed up + verified and then
+	// RETAINED for the retention window; a later run drops it once aged. Exception:
+	// --drain-backlog drops it THIS run, to reclaim the historical backlog immediately
+	// on the one-off cutover run (the recurring cron never sets it).
+	archive, err := newArchiveName(cfg.AuditTable, now)
 	if err != nil {
 		return err
 	}
@@ -189,74 +230,88 @@ func runPGAuditRotate() error {
 		slog.Error("rotate_failed_will_retry_next_run", "error", err.Error())
 		return err
 	}
-
-	// 3. Carry forward the read set, back up the archive, then drop it.
-	if err := backupAndDropArchive(ctx, backend, cfg, archive, tracker); err != nil {
-		slog.Error("backup_and_drop_failed", "archive", archive, "error", err.Error())
+	if err := backend.BackupAndVerify(ctx, archive, tracker); err != nil {
+		slog.Error("backup_and_verify_failed", "archive", archive, "error", err.Error())
 		return err
 	}
+	if cfg.DrainBacklog {
+		slog.Info("drain_backlog_dropping_new_archive", "schema", cfg.PGSchema, "archive", archive)
+		// deepVerify=false: BackupAndVerify above already did the restore-verify this
+		// run (when --verify-restore), so skip a redundant full re-download.
+		if err := backend.verifyAndDrop(ctx, archive, false); err != nil {
+			slog.Error("drain_backlog_drop_failed", "archive", archive, "error", err.Error())
+			return err
+		}
+		dropped++
+	} else {
+		retained++
+	}
 
-	stats.PrintSummary("pg_audit_rotate_completed", tracker, cfg.StorageType, time.Since(start))
+	// A single at-a-glance signal for alerting: an operator/monitor can tell a healthy
+	// retain-only run from a "reclaimed nothing / archives piling up" run (e.g. a
+	// clock-skewed pod that never drops). oldest_archive_age_days climbing past
+	// retention_days, or archives_found growing run over run, means retention isn't
+	// keeping up.
+	slog.Info("audit_rotate_summary",
+		"archives_found", len(leftovers),
+		"archives_recovered", recovered,
+		"archives_dropped", dropped,
+		"archives_retained", retained,
+		"archives_quarantined", quarantined,
+		"oldest_archive_age_days", oldestArchiveAgeDays(leftovers, cfg.AuditTable, now),
+		"retention_days", cfg.RetentionDays)
+
+	stats.PrintSummary("pg_audit_rotate_completed", tracker, cfg.StorageType, time.Since(now))
 	if tracker.GetFailedCount() > 0 {
 		return fmt.Errorf("pg audit-rotate completed with failures")
 	}
 	if quarantined > 0 {
-		// Rotation succeeded (disk reclaimed for this cycle) but a leftover needs
-		// attention; return non-zero so the CronJob surfaces it.
-		return fmt.Errorf("%d leftover archive(s) could not be recovered and were quarantined; rotation proceeded", quarantined)
-	}
-	if cfg.NoDrop {
-		// Every run under --no-drop leaves the rotated archive backed up but undropped
-		// (disk NOT reclaimed). Return non-zero + WARN so this can't be mistaken for a
-		// completed rotation and archives don't accumulate silently.
-		slog.Warn("no_drop_archives_retained", "note", "archive(s) rotated + backed up + verified but NOT dropped (--no-drop); disk not reclaimed -- finalize with --drop-pending after confirming")
-		return fmt.Errorf("--no-drop: archive(s) retained and drop deferred; finalize with --drop-pending")
+		// Rotation succeeded (this cycle's archive rotated + backed up) but a leftover
+		// needs attention; return non-zero so the CronJob surfaces it.
+		return fmt.Errorf("%d archive(s) could not be reconciled and were quarantined; rotation proceeded", quarantined)
 	}
 	return nil
 }
 
-// dropPendingArchives implements --drop-pending: verify each already-backed-up
-// leftover archive against its sidecar (+ pg_restore -l) and drop the ones that
-// verify. A failure quarantines that archive (logged, run exits non-zero) but does
-// not stop the others. No rotation, no re-dump.
-func dropPendingArchives(ctx context.Context, backend *pgArchiveBackend, cfg *config.AppConfig) error {
-	leftovers, err := backend.QueryRows(ctx, listArchivesSQL(cfg.PGSchema, cfg.AuditTable))
+// reconcileArchive brings one leftover archive to its correct state WITHOUT ever
+// dropping an un-backed-up one, and reports what it did. First it ensures a durable
+// backup exists in the bucket: an already-backed-up archive is left as-is, while one
+// with a missing/incomplete backup is re-dumped (recovered=true). Then, if the archive
+// has aged past the retention window, it is DROPped whole (dropped=true); otherwise it
+// is left in place.
+// A name whose rotation time can't be parsed is a quarantine (error), never dropped
+// -- fail safe.
+func reconcileArchive(ctx context.Context, b *pgArchiveBackend, cfg *config.AppConfig, archive string, now time.Time, tracker *stats.Tracker) (recovered, dropped bool, err error) {
+	backedUp, err := b.hasBackup(ctx, archive)
 	if err != nil {
-		return fmt.Errorf("listing pending archives: %w", err)
+		return false, false, fmt.Errorf("checking backup state of %s: %w", archive, err)
 	}
-	if len(leftovers) == 0 {
-		slog.Info("drop_pending_no_leftovers")
-		return nil
-	}
-	quarantined := 0
-	for _, archive := range leftovers {
-		slog.Info("verifying_pending_archive", "archive", archive)
-		if err := backend.verifyExistingAndDrop(ctx, archive); err != nil {
-			slog.Error("pending_archive_verify_failed_not_dropped", "archive", archive, "error", err.Error())
-			quarantined++
+	if !backedUp {
+		slog.Info("recovering_pending_archive", "archive", archive)
+		if err := b.BackupAndVerify(ctx, archive, tracker); err != nil {
+			return false, false, fmt.Errorf("recovering %s: %w", archive, err)
 		}
+		recovered = true
 	}
-	if quarantined > 0 {
-		return fmt.Errorf("%d pending archive(s) failed verification and were NOT dropped", quarantined)
+	aged, err := agedOut(archive, cfg.AuditTable, now, cfg.RetentionDays)
+	if err != nil {
+		return recovered, false, fmt.Errorf("cannot determine rotation time for %s (will not drop): %w", archive, err)
 	}
-	return nil
+	if !aged {
+		slog.Info("archive_retained_in_window", "archive", archive, "retention_days", cfg.RetentionDays)
+		return recovered, false, nil
+	}
+	slog.Info("archive_aged_out_dropping", "archive", archive, "retention_days", cfg.RetentionDays)
+	if err := b.verifyAndDrop(ctx, archive, cfg.VerifyRestore); err != nil {
+		return recovered, false, err
+	}
+	return recovered, true, nil
 }
 
-// archiveBackend is the seam backupAndDropArchive depends on. Isolating the DB
-// (QueryRows/Exec) and the backup+verify step behind an interface lets the
-// drop-gate -- the sole irreversible step -- be unit-tested with a fake, without
-// a real Postgres or object store.
-type archiveBackend interface {
-	QueryRows(ctx context.Context, sql string) ([]string, error)
-	Exec(ctx context.Context, sql string) error
-	// BackupAndVerify streams the archive table to storage and verifies it landed
-	// intact (upload success + HeadObject size match + sidecar SHA-256, and -- when
-	// verify-restore is set -- a full re-download SHA-256 match). Returns nil ONLY
-	// on a fully verified upload; the caller drops only on nil.
-	BackupAndVerify(ctx context.Context, archive string, tracker *stats.Tracker) error
-}
-
-// pgArchiveBackend is the production archiveBackend: real psql/pg_dump + storage.
+// pgArchiveBackend wires the real psql/pg_dump client to the object store. The
+// backup+verify step and the pre-drop gate are isolated as methods that touch ONLY
+// the store (backupIsDroppable) so the sole irreversible step -- the drop -- can be
+// unit-tested against a fake store without a real Postgres.
 type pgArchiveBackend struct {
 	*pg.Client
 	store storage.Provider
@@ -459,74 +514,94 @@ func (b *pgArchiveBackend) readSidecar(ctx context.Context, key string) (string,
 	return strings.TrimSpace(buf.String()), nil
 }
 
-// verifyExistingAndDrop is the --drop-pending path: verify an ALREADY-backed-up
-// leftover archive against its stored sidecar digest (independent re-download +
-// pg_restore -l) and, only if it verifies, DROP it -- WITHOUT re-dumping. This is
-// the confirm step after a --no-drop run: it drops the exact object you inspected.
-func (b *pgArchiveBackend) verifyExistingAndDrop(ctx context.Context, archive string) error {
+// hasBackup reports whether the archive's backup is durably present in the bucket.
+// It requires BOTH the dump object AND its .sha256 sidecar (the sidecar is written
+// LAST, after the dump upload + a HeadObject size match, so in normal operation its
+// presence already implies a complete upload; requiring the dump too makes recovery
+// self-heal the anomaly where the dump was later deleted out-of-band -- either
+// missing => not-backed-up => re-dump, which overwrites both keys). This state lives
+// in the bucket, NOT on the (ephemeral) pod. A definitive ErrNotFound on either
+// object means not-backed-up; any other (transient/credential) error is propagated
+// so the caller neither re-dumps blindly nor treats an ambiguous state as absence.
+func (b *pgArchiveBackend) hasBackup(ctx context.Context, archive string) (bool, error) {
+	key, _ := b.keyAndSuffix(archive)
+	vctx, cancel := b.verifyCtx(ctx)
+	defer cancel()
+	for _, obj := range []string{key, key + ".sha256"} {
+		if _, err := b.store.Head(vctx, obj); err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return false, nil
+			}
+			return false, fmt.Errorf("checking backup object %s: %w", obj, err)
+		}
+	}
+	return true, nil
+}
+
+// verifyAndDrop is the guarded drop, shared by the retention aged-out drop and the
+// --drain-backlog path. It confirms the archive's backup is durably present in
+// the bucket, then DROPs the archive table (the sole irreversible step, so it runs
+// only after the gate passes). The cheap default gate is EXISTENCE-only -- the dump
+// object AND its .sha256 sidecar must both be present (Head, no download): the size
+// was verified at write time before the sidecar was written, and object stores don't
+// truncate in place, so both-present is a sound pre-drop gate. With --verify-restore
+// it additionally re-downloads, decrypts, runs pg_restore -l, and matches the
+// whole-object SHA-256 against the sidecar (proves restorability, at the cost of a
+// full re-download) -- reserve that for the on-demand/cutover job.
+func (b *pgArchiveBackend) verifyAndDrop(ctx context.Context, archive string, deepVerify bool) error {
+	if err := b.backupIsDroppable(ctx, archive, deepVerify); err != nil {
+		return err
+	}
+	slog.Info("archive_verified_dropping", "schema", b.cfg.PGSchema, "archive", archive, "deep_verify", deepVerify)
+	return b.Exec(ctx, dropArchiveSQL(b.cfg.PGSchema, archive, b.cfg.LockTimeout))
+}
+
+// backupIsDroppable is the pre-drop gate: it returns nil only when the archive's
+// backup is safe to drop. It touches ONLY the object store (no DB), so it -- the
+// decision guarding the sole irreversible step -- is unit-testable against a fake
+// store. The cheap default gate is existence-only: the dump object AND its .sha256
+// sidecar must both be present (Head, no download). With --verify-restore it also
+// re-downloads, decrypts, runs pg_restore -l, and matches the whole-object SHA-256
+// against the sidecar (proves restorability, at the cost of a full re-download) --
+// callers pass deepVerify=false to skip that when the archive was already
+// verify-restored earlier in the SAME run (e.g. --drain-backlog right after
+// BackupAndVerify), avoiding a redundant full re-download. A definitive ErrNotFound
+// -- or any other error -- returns non-nil so the caller does NOT drop.
+func (b *pgArchiveBackend) backupIsDroppable(ctx context.Context, archive string, deepVerify bool) error {
 	key, _ := b.keyAndSuffix(archive)
 	vctx, cancel := b.verifyCtx(ctx)
 	defer cancel()
 
-	info, err := b.store.Head(vctx, key)
+	dumpInfo, err := b.store.Head(vctx, key)
 	if err != nil {
-		return fmt.Errorf("no backup object for %s: %w", key, err)
+		return fmt.Errorf("pre-drop check: backup object missing/unreadable for %s (NOT dropping): %w", key, err)
 	}
-	want, err := b.readSidecar(vctx, key)
-	if err != nil {
-		return err
+	if _, err := b.store.Head(vctx, key+".sha256"); err != nil {
+		return fmt.Errorf("pre-drop check: sidecar missing/unreadable for %s (NOT dropping): %w", key, err)
 	}
-	if err := b.verifyRestorable(vctx, key, want, info.Size); err != nil {
-		return err
-	}
-	slog.Info("pending_archive_verified_dropping", "schema", b.cfg.PGSchema, "archive", archive, "key", key, "sha256", want)
-	return b.Exec(ctx, dropArchiveSQL(b.cfg.PGSchema, archive, b.cfg.LockTimeout))
-}
-
-// backupAndDropArchive carries the read set forward, backs up + verifies the archive,
-// and -- only on a fully VERIFIED upload (and unless --no-drop) -- DROPs it. Anything
-// short of verified leaves the archive for the next run's recovery: the drop is the
-// sole irreversible step.
-func backupAndDropArchive(ctx context.Context, b archiveBackend, cfg *config.AppConfig, archive string, tracker *stats.Tracker) error {
-	fqTable := fmt.Sprintf("%s.%s", cfg.PGSchema, archive)
-
-	// Carry the read set (INSTANCES + optional tail) forward from this sealed
-	// archive into the live table before we drop it. Idempotent (ON CONFLICT DO
-	// NOTHING) and safe to run on both the normal and recovery paths, so a
-	// keep-copy that failed on a prior run is repaired here rather than stranding
-	// readable rows in an about-to-be-dropped archive. Columns are enumerated by
-	// NAME (not SELECT *) so a schema change to the live table between a failed run
-	// and its recovery copies the shared columns instead of wedging or corrupting.
-	cols, err := b.QueryRows(ctx, sharedColumnsSQL(cfg.PGSchema, cfg.AuditTable, archive))
-	if err != nil {
-		return fmt.Errorf("resolving shared columns for %s: %w", fqTable, err)
-	}
-	if len(cols) == 0 {
-		return fmt.Errorf("no shared columns between %s.%s and %s -- refusing keep-copy", cfg.PGSchema, cfg.AuditTable, fqTable)
-	}
-	if err := b.Exec(ctx, keepCopySQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.KeepTailDays, cfg.LockTimeout, cols)); err != nil {
-		return fmt.Errorf("keep-copy from %s failed: %w", fqTable, err)
-	}
-
-	// Back up + verify. Drop ONLY on nil (fully verified); any error leaves the
-	// archive in place for next-run recovery.
-	if err := b.BackupAndVerify(ctx, archive, tracker); err != nil {
-		return fmt.Errorf("archive %s not verified; leaving it in place for next-run recovery: %w", fqTable, err)
-	}
-
-	if cfg.NoDrop {
-		slog.Info("drop_deferred_no_drop", "archive", fqTable, "note", "backup verified; drop deferred -- run again without --no-drop, or DROP manually, after confirming")
-		return nil
-	}
-
-	slog.Info("archive_verified_dropping", "archive", fqTable)
-	if err := b.Exec(ctx, dropArchiveSQL(cfg.PGSchema, archive, cfg.LockTimeout)); err != nil {
-		// Backup verified; a drop that lost the lock race just leaves the archive
-		// for next-run recovery (which re-uploads to the same key and retries).
-		return fmt.Errorf("archive verified but drop failed for %s: %w", fqTable, err)
+	if deepVerify {
+		want, err := b.readSidecar(vctx, key)
+		if err != nil {
+			return err
+		}
+		if err := b.verifyRestorable(vctx, key, want, dumpInfo.Size); err != nil {
+			return err
+		}
+		slog.Info("archive_verify_restore_passed", "key", key, "sha256", want)
 	}
 	return nil
 }
+
+// archiveInfix separates the audit base name from the rotation timestamp in an
+// archive table name (<audit><archiveInfix><ts>_<hex>). archiveTSLayout is the UTC
+// timestamp layout used to BOTH format (newArchiveName) and parse (archiveRotationTime)
+// that timestamp -- a single source so the two can never drift. Drift would silently
+// break archiveRotationTime, which by its fail-safe design would then retain every
+// archive forever (never drop) -- the exact disk-relief failure this feature prevents.
+const (
+	archiveInfix    = "_archive_"
+	archiveTSLayout = "20060102t150405z"
+)
 
 // newArchiveName builds a per-rotation archive table name with a second-resolution
 // UTC timestamp plus a random suffix, so two distinct rotations landing in the same
@@ -537,7 +612,7 @@ func newArchiveName(audit string, now time.Time) (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generating archive suffix: %w", err)
 	}
-	return fmt.Sprintf("%s_archive_%s_%s", audit, now.UTC().Format("20060102t150405z"), hex.EncodeToString(b)), nil
+	return fmt.Sprintf("%s%s%s_%s", audit, archiveInfix, now.UTC().Format(archiveTSLayout), hex.EncodeToString(b)), nil
 }
 
 // listArchivesSQL lists archive tables left by prior runs. The match is ANCHORED to
@@ -563,25 +638,68 @@ func assertNoOwnedSequenceSQL(schema, audit string) string {
 	)
 }
 
-// assertHasUniqueSQL returns the PRIMARY KEY / UNIQUE constraints on the audit
-// table. The keep-copy's ON CONFLICT DO NOTHING idempotency (safe re-copy on the
-// recovery path) is a no-op unless such a constraint exists; refuse if there is none.
-func assertHasUniqueSQL(schema, audit string) string {
-	return fmt.Sprintf(
-		"SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema = '%s' AND table_name = '%s' AND constraint_type IN ('PRIMARY KEY', 'UNIQUE');",
-		schema, audit,
-	)
+// countInstancesSQL counts the FROZEN legacy entity_name='instances' rows in the
+// live audit table. These are still READ by InstanceService (old-revision instance
+// deep-links + 30-day analytics) but no longer written; this mode does NOT carry
+// them forward, so a first rotation against a table that has them would eventually
+// destroy them. The preflight uses this to refuse (unless --drop-instance-rows)
+// rather than silently lose live-read data.
+func countInstancesSQL(schema, audit string) string {
+	return fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE entity_name = 'instances';", schema, audit)
 }
 
-// sharedColumnsSQL returns the columns present in BOTH the live audit table and the
-// archive, ordered by the live table's column order, so the keep-copy can name them
-// explicitly and survive a schema change across a failed run + recovery.
-func sharedColumnsSQL(schema, audit, archive string) string {
-	return fmt.Sprintf(`SELECT a.column_name FROM information_schema.columns a
-JOIN information_schema.columns b
-  ON b.table_schema = a.table_schema AND b.table_name = '%[3]s' AND b.column_name = a.column_name
-WHERE a.table_schema = '%[1]s' AND a.table_name = '%[2]s'
-ORDER BY a.ordinal_position;`, schema, audit, archive)
+// nonOwnerGrantsSQL lists the roles (or PUBLIC) that hold a GRANT on the audit table
+// other than its owner. CREATE TABLE ... LIKE ... INCLUDING ALL copies neither table
+// ownership nor ACLs, so any such grant silently vanishes on the fresh table after a
+// rotation. aclexplode(relacl) yields one row per (grantee, privilege); relacl is NULL
+// (=> no rows) for the common owner-only table, so this returns nothing there.
+func nonOwnerGrantsSQL(schema, audit string) string {
+	return fmt.Sprintf(`SELECT DISTINCT CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE acl.grantee::regrole::text END
+FROM pg_class c, aclexplode(c.relacl) AS acl
+WHERE c.oid = '%s.%s'::regclass AND acl.grantee <> c.relowner;`, schema, audit)
+}
+
+// oldestArchiveAgeDays returns the age in whole days of the oldest parseable archive
+// (0 if none) -- an at-a-glance signal for alerting: climbing past retentionDays means
+// aged archives aren't being dropped (retention isn't keeping up). Unparseable names
+// are skipped (they're quarantined elsewhere).
+func oldestArchiveAgeDays(archives []string, audit string, now time.Time) int {
+	oldest := 0
+	for _, a := range archives {
+		if rot, err := archiveRotationTime(a, audit); err == nil {
+			if d := int(now.UTC().Sub(rot).Hours() / 24); d > oldest {
+				oldest = d
+			}
+		}
+	}
+	return oldest
+}
+
+// archiveRotationTime extracts the rotation instant encoded in an archive table name
+// (<audit>_archive_<YYYYMMDDtHHMMSSz>_<hex>). This is the drop-gate oracle --
+// deliberately NOT revision_created_date, a content column that can be backdated. The
+// timestamp is UTC (the trailing 'z' is a literal in the layout, not a zone). Returns
+// an error on any malformed name so the caller can fail SAFE (retain, never drop) --
+// never the time.Parse zero-value (year 1), which would read as "ancient -> drop".
+func archiveRotationTime(archive, audit string) (time.Time, error) {
+	rest := strings.TrimPrefix(archive, audit+archiveInfix)
+	if rest == archive || len(rest) < len(archiveTSLayout) {
+		return time.Time{}, fmt.Errorf("archive name %q does not carry a rotation timestamp", archive)
+	}
+	return time.Parse(archiveTSLayout, rest[:len(archiveTSLayout)])
+}
+
+// agedOut reports whether an archive has passed the retention window, measured from
+// its rotation time (from the name) -- never from backdatable row content. It returns
+// an error (caller must NOT drop) rather than a boolean on a name it can't parse.
+// retentionDays==0 makes any prior-run archive eligible for drop on the next run.
+func agedOut(archive, audit string, now time.Time, retentionDays int) (bool, error) {
+	rot, err := archiveRotationTime(archive, audit)
+	if err != nil {
+		return false, err
+	}
+	cutoff := now.UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	return rot.Before(cutoff), nil
 }
 
 // dropArchiveSQL drops the archive inside a txn bounded by lock_timeout (so a
@@ -603,8 +721,8 @@ COMMIT;
 // LIKE can reclaim the canonical names.
 //
 // The rename-aside suffix is derived from the (unique) ARCHIVE name, NOT from the
-// original constraint/index name: multiple archives can coexist (a --no-drop staging
-// run, or a leftover that couldn't be dropped/was quarantined), and every rotation
+// original constraint/index name: multiple archives coexist under retention (up to
+// ~retention/cadence at once, plus any quarantined leftover), and every rotation
 // starts from a fresh table whose PK is again named `audit_pkey`. A suffix derived
 // from the constant original name would collide schema-wide across archives
 // (`relation "audit_pkey_..." already exists`); md5(archive) makes it per-archive
@@ -613,6 +731,7 @@ COMMIT;
 func rotateSQL(schema, audit, archive, lockTimeout string) string {
 	return fmt.Sprintf(`BEGIN;
 SET LOCAL lock_timeout = '%[4]s';
+SET LOCAL statement_timeout = 0;
 ALTER TABLE %[1]s.%[2]s RENAME TO %[3]s;
 DO $ROT$
 DECLARE r record;
@@ -631,33 +750,6 @@ $ROT$;
 CREATE TABLE %[1]s.%[2]s (LIKE %[1]s.%[3]s INCLUDING ALL);
 COMMIT;
 `, schema, audit, archive, lockTimeout)
-}
-
-// keepCopySQL carries the read set forward from the now-sealed archive into the
-// fresh table, out of the rotation lock. INSTANCES rows (the only ones read) are
-// always kept; keepTailDays>0 additionally keeps a recent tail of all entities.
-// Columns are named explicitly (survives schema drift; see backupAndDropArchive).
-// With keepTailDays==0 the WHERE is INSTANCES-only so it uses the leading-column
-// index instead of a full seq-scan on the unindexed revision_created_date. A
-// generous statement_timeout=0 prevents a role-level statement_timeout from
-// aborting the copy. ON CONFLICT DO NOTHING guards against a rare concurrent re-audit.
-func keepCopySQL(schema, audit, archive string, keepTailDays int, lockTimeout string, cols []string) string {
-	quoted := make([]string, len(cols))
-	for i, c := range cols {
-		quoted[i] = `"` + strings.ReplaceAll(c, `"`, `""`) + `"`
-	}
-	colList := strings.Join(quoted, ", ")
-	where := "entity_name = 'instances'"
-	if keepTailDays > 0 {
-		where += fmt.Sprintf("\n   OR revision_created_date >= now() - make_interval(days => %d)", keepTailDays)
-	}
-	return fmt.Sprintf(`SET statement_timeout = 0;
-SET lock_timeout = '%[6]s';
-INSERT INTO %[1]s.%[2]s (%[4]s)
-SELECT %[4]s FROM %[1]s.%[3]s
-WHERE %[5]s
-ON CONFLICT DO NOTHING;
-`, schema, audit, archive, colList, where, lockTimeout)
 }
 
 func init() {

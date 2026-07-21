@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	tmtypes "github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
 
 type s3Provider struct {
@@ -60,6 +62,20 @@ func (p *s3Provider) UploadStream(ctx context.Context, remotePath string, reader
 	return err
 }
 
+// mapS3NotFound maps a HeadObject error to ErrNotFound when it is a definitive 404
+// (HeadObject -> NotFound, or NoSuchKey), so callers can distinguish a confirmed
+// absence from a transient/credential error (e.g. throttling, AccessDenied). Any
+// other error is passed through as a generic failure.
+func mapS3NotFound(remotePath string, err error) error {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if code := apiErr.ErrorCode(); code == "NotFound" || code == "NoSuchKey" {
+			return fmt.Errorf("head object %q: %w", remotePath, ErrNotFound)
+		}
+	}
+	return fmt.Errorf("head object %q failed: %w", remotePath, err)
+}
+
 // Head returns the stored object's size via a HeadObject call (no body download).
 func (p *s3Provider) Head(ctx context.Context, remotePath string) (*ObjectInfo, error) {
 	out, err := p.client.HeadObject(ctx, &s3.HeadObjectInput{
@@ -67,7 +83,7 @@ func (p *s3Provider) Head(ctx context.Context, remotePath string) (*ObjectInfo, 
 		Key:    aws.String(remotePath),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("head object %q failed: %w", remotePath, err)
+		return nil, mapS3NotFound(remotePath, err)
 	}
 	if out.ContentLength == nil {
 		return nil, fmt.Errorf("head object %q returned no ContentLength", remotePath)
