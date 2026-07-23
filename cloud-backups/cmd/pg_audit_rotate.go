@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net"
@@ -76,6 +77,7 @@ func runPGAuditRotate() error {
 		PGSchema:            viper.GetString("pg-schema"),
 		AuditTable:          viper.GetString("audit-table"),
 		RetentionDays:       viper.GetInt("audit-retention-days"),
+		RotationInterval:    viper.GetInt("rotation-interval-days"),
 		LockTimeout:         viper.GetString("lock-timeout"),
 		AllowUnencrypted:    viper.GetBool("allow-unencrypted"),
 		VerifyRestore:       viper.GetBool("verify-restore"),
@@ -216,48 +218,95 @@ func runPGAuditRotate() error {
 		}
 	}
 
-	// Pass 2: rotate -- rename the live table aside and stand up a fresh EMPTY one
-	// (fail-safe on lock contention). The new archive is backed up + verified and then
-	// RETAINED for the retention window; a later run drops it once aged. Exception:
-	// --drain-backlog drops it THIS run, to reclaim the historical backlog immediately
-	// on the one-off cutover run (the recurring cron never sets it).
-	archive, err := newArchiveName(cfg.AuditTable, now)
+	// Rotation gate: decide whether to cut a new archive THIS run. With
+	// rotation-interval-days == 0 (default) we rotate every run (unchanged behavior).
+	// Otherwise rotation is decoupled from the cron cadence -- we rotate only when the
+	// newest existing archive is >= the interval old (or none exists), so a fast cron
+	// reconciles (Pass 1) every run but cuts archives only every interval. --drain-backlog
+	// always rotates (the one-off cutover). Re-query the archive set AFTER Pass 1's drops
+	// so the decision reflects reality. newestSeen feeds the rotate guard below.
+	current, err := pgClient.QueryRows(ctx, listArchivesSQL(cfg.PGSchema, cfg.AuditTable))
 	if err != nil {
+		slog.Error("list_current_archives_failed", "error", err.Error())
 		return err
 	}
-	slog.Info("rotating_audit_table", "schema", cfg.PGSchema, "table", cfg.AuditTable, "archive", archive)
-	if err := pgClient.Exec(ctx, rotateSQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.LockTimeout)); err != nil {
-		slog.Error("rotate_failed_will_retry_next_run", "error", err.Error())
-		return err
+	newestSeen, newestRot, haveNewest := newestArchive(current, cfg.AuditTable)
+	newestAgeDays := 0
+	if haveNewest {
+		newestAgeDays = int(now.UTC().Sub(newestRot).Hours() / 24)
 	}
-	if err := backend.BackupAndVerify(ctx, archive, tracker); err != nil {
-		slog.Error("backup_and_verify_failed", "archive", archive, "error", err.Error())
-		return err
-	}
-	if cfg.DrainBacklog {
-		slog.Info("drain_backlog_dropping_new_archive", "schema", cfg.PGSchema, "archive", archive)
-		// deepVerify=false: BackupAndVerify above already did the restore-verify this
-		// run (when --verify-restore), so skip a redundant full re-download.
-		if err := backend.verifyAndDrop(ctx, archive, false); err != nil {
-			slog.Error("drain_backlog_drop_failed", "archive", archive, "error", err.Error())
+	rotate, skipReason := rotationDecision(cfg, now, newestRot, haveNewest)
+
+	rotated := false
+	if rotate {
+		// Pass 2: rotate -- rename the live table aside and stand up a fresh EMPTY one
+		// (fail-safe on lock contention). The new archive is backed up + verified and then
+		// RETAINED for the retention window; a later run drops it once aged. Exception:
+		// --drain-backlog drops it THIS run, to reclaim the historical backlog immediately
+		// on the one-off cutover run (the recurring cron never sets it).
+		archive, err := newArchiveName(cfg.AuditTable, now)
+		if err != nil {
 			return err
 		}
-		dropped++
+		slog.Info("rotating_audit_table", "schema", cfg.PGSchema, "table", cfg.AuditTable, "archive", archive)
+		// The rotate transaction is self-guarding against a concurrent rotation (a manual
+		// job racing the cron): it takes a transaction advisory lock and aborts if a newer
+		// archive already exists, so two overlapping runs can't both cut an archive (the
+		// second would otherwise rotate the fresh EMPTY table into a stray archive that
+		// squats for a whole retention window). A guarded abort is a benign skip, not a
+		// failure -- another run already did the rotation.
+		if err := pgClient.Exec(ctx, rotateSQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.LockTimeout, advisoryLockKey(cfg.PGSchema, cfg.AuditTable), newestSeen)); err != nil {
+			if isRotateSkip(err) {
+				slog.Info("rotation_skipped_concurrent", "archive", archive, "reason", "another run rotated concurrently (advisory-lock/supersession guard)")
+				skipReason = "concurrent rotation by another run"
+			} else {
+				slog.Error("rotate_failed_will_retry_next_run", "error", err.Error())
+				return err
+			}
+		} else {
+			rotated = true
+			if err := backend.BackupAndVerify(ctx, archive, tracker); err != nil {
+				slog.Error("backup_and_verify_failed", "archive", archive, "error", err.Error())
+				return err
+			}
+			if cfg.DrainBacklog {
+				slog.Info("drain_backlog_dropping_new_archive", "schema", cfg.PGSchema, "archive", archive)
+				// deepVerify=false: BackupAndVerify above already did the restore-verify this
+				// run (when --verify-restore), so skip a redundant full re-download.
+				if err := backend.verifyAndDrop(ctx, archive, false); err != nil {
+					slog.Error("drain_backlog_drop_failed", "archive", archive, "error", err.Error())
+					return err
+				}
+				dropped++
+			} else {
+				retained++
+			}
+		}
 	} else {
-		retained++
+		slog.Info("rotation_skipped_not_due", "reason", skipReason, "newest_archive_age_days", newestAgeDays, "rotation_interval_days", cfg.RotationInterval)
 	}
 
-	// A single at-a-glance signal for alerting: an operator/monitor can tell a healthy
-	// retain-only run from a "reclaimed nothing / archives piling up" run (e.g. a
-	// clock-skewed pod that never drops). oldest_archive_age_days climbing past
-	// retention_days, or archives_found growing run over run, means retention isn't
-	// keeping up.
+	// A single at-a-glance signal for alerting. rotated_this_run + newest_archive_age_days
+	// let a monitor page on "was due but did not rotate" (rotated_this_run=false AND
+	// newest_archive_age_days >= rotation_interval_days + grace) -- the failure that, under
+	// interval rotation, would otherwise read as healthy (a stalled rotation leaves a young
+	// or zero archive set, so the old oldest>retention signal can't see it). A reconcile-
+	// only run reads clearly as "skipped: not due yet". oldest_archive_age_days is retained
+	// for the retention-health signal (climbing past retention_days = drops not keeping up).
+	rotationSkippedReason := ""
+	if !rotated {
+		rotationSkippedReason = skipReason
+	}
 	slog.Info("audit_rotate_summary",
 		"archives_found", len(leftovers),
 		"archives_recovered", recovered,
 		"archives_dropped", dropped,
 		"archives_retained", retained,
 		"archives_quarantined", quarantined,
+		"rotated_this_run", rotated,
+		"rotation_interval_days", cfg.RotationInterval,
+		"rotation_skipped_reason", rotationSkippedReason,
+		"newest_archive_age_days", newestAgeDays,
 		"oldest_archive_age_days", oldestArchiveAgeDays(leftovers, cfg.AuditTable, now),
 		"retention_days", cfg.RetentionDays)
 
@@ -705,13 +754,69 @@ func agedOut(archive, audit string, now time.Time, retentionDays int) (bool, err
 // dropArchiveSQL drops the archive inside a txn bounded by lock_timeout (so a
 // concurrent ACCESS SHARE holder -- e.g. the full-DB backup's pg_dump -- makes the
 // drop fail fast and defer to next-run recovery, not hang) with no statement_timeout.
+// DROP TABLE IF EXISTS makes a concurrent double-drop benign: two overlapping runs can
+// both list the same aged archive in Pass 1 and both try to drop it; the loser's drop of
+// the already-gone table is a no-op success, not a spurious quarantine + non-zero exit.
 func dropArchiveSQL(schema, archive, lockTimeout string) string {
 	return fmt.Sprintf(`BEGIN;
 SET LOCAL lock_timeout = '%[3]s';
 SET LOCAL statement_timeout = 0;
-DROP TABLE %[1]s.%[2]s;
+DROP TABLE IF EXISTS %[1]s.%[2]s;
 COMMIT;
 `, schema, archive, lockTimeout)
+}
+
+// advisoryLockKey derives the transaction advisory-lock key that serializes rotation for
+// a given audit table (distinct tables don't block each other). Stable across runs and
+// hosts (a pure hash of schema.table), 64-bit to match pg_try_advisory_xact_lock(bigint).
+func advisoryLockKey(schema, audit string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("cloud-backup:audit-rotate:" + schema + "." + audit))
+	return int64(h.Sum64())
+}
+
+// rotateSkipToken marks a rotate transaction that aborted because another run already
+// rotated (advisory-lock contention or a superseding newer archive). It's a benign skip,
+// not a failure -- the caller detects it via isRotateSkip and continues without error.
+const rotateSkipToken = "AUDIT_ROTATE_SKIP"
+
+func isRotateSkip(err error) bool {
+	return err != nil && strings.Contains(err.Error(), rotateSkipToken)
+}
+
+// newestArchive returns the newest (latest rotation time) archive in the set and whether
+// any exists. Names from listArchivesSQL all carry a well-formed timestamp (the SQL regex
+// matches exactly the generated shape), so each parses; the skip-on-parse-error is
+// defensive. Used to decide whether the interval has elapsed since the last rotation.
+func newestArchive(archives []string, audit string) (name string, rot time.Time, ok bool) {
+	for _, a := range archives {
+		t, err := archiveRotationTime(a, audit)
+		if err != nil {
+			continue
+		}
+		if !ok || t.After(rot) {
+			name, rot, ok = a, t, true
+		}
+	}
+	return name, rot, ok
+}
+
+// rotationDecision decides whether Pass 2 cuts a new archive this run. --drain-backlog and
+// the OFF setting (rotation-interval-days == 0) always rotate (today's every-run behavior).
+// Otherwise rotate only when no archive exists (bootstrap / all aged out) OR the newest one
+// is older than the interval -- using the SAME precise cutoff as the retention drop
+// (agedOut). Sharing the threshold is what makes interval == retention hold EXACTLY one
+// archive: on the run the lone archive crosses the line, Pass 1 drops it, so this re-queried
+// set is empty and we rotate a fresh one -- never a transient second archive.
+func rotationDecision(cfg *config.AppConfig, now, newestRot time.Time, haveNewest bool) (rotate bool, skipReason string) {
+	if cfg.DrainBacklog || cfg.RotationInterval == 0 || !haveNewest {
+		return true, ""
+	}
+	cutoff := now.UTC().Add(-time.Duration(cfg.RotationInterval) * 24 * time.Hour)
+	if newestRot.Before(cutoff) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("newest archive rotated %s; rotation interval %dd not yet elapsed", newestRot.UTC().Format(time.RFC3339), cfg.RotationInterval)
 }
 
 // rotateSQL renames the live table aside and creates a fresh identical one in a
@@ -728,10 +833,37 @@ COMMIT;
 // (`relation "audit_pkey_..." already exists`); md5(archive) makes it per-archive
 // unique. The renamed names are throwaway (the archive is dropped later); only
 // uniqueness matters. left(name,54)+'_'+8 stays within the 63-byte identifier limit.
-func rotateSQL(schema, audit, archive, lockTimeout string) string {
+//
+// The transaction is self-guarding against a CONCURRENT rotation (a manual job racing
+// the cron, which k8s concurrencyPolicy can't prevent for distinct jobs): it takes a
+// transaction advisory lock (lockKey) and aborts if any archive newer than newestSeen
+// already exists. Without this, two runs that both passed the rotation gate would each
+// rename -- the second renaming the fresh EMPTY table into a stray archive that squats
+// for a whole retention window. Both checks run BEFORE the rename, inside the lock, so
+// they're atomic w.r.t. another rotation; the abort raises rotateSkipToken, which the
+// caller treats as a benign skip. newestSeen is "" when no archive existed at decision
+// time (then any archive => superseded); otherwise it's the newest name the gate saw.
+// The supersession test is lexical (tablename > newestSeen), which equals chronological
+// because the embedded timestamp is fixed-width UTC -- sound unless the wall clock steps
+// backward far enough that a concurrent winner's name sorts below newestSeen (needs
+// multiple rotations inside one wall-second plus a clock step; not operationally reachable,
+// same NTP assumption newArchiveName already notes).
+func rotateSQL(schema, audit, archive, lockTimeout string, lockKey int64, newestSeen string) string {
 	return fmt.Sprintf(`BEGIN;
 SET LOCAL lock_timeout = '%[4]s';
 SET LOCAL statement_timeout = 0;
+DO $GUARD$
+BEGIN
+  IF NOT pg_try_advisory_xact_lock(%[5]d) THEN
+    RAISE EXCEPTION '%[6]s: another rotation holds the advisory lock';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = '%[1]s'
+             AND tablename ~ '^%[2]s_archive_[0-9]{8}t[0-9]{6}z(_[0-9a-f]+)?$'
+             AND tablename > '%[7]s') THEN
+    RAISE EXCEPTION '%[6]s: a newer archive already exists (superseded by a concurrent run)';
+  END IF;
+END
+$GUARD$;
 ALTER TABLE %[1]s.%[2]s RENAME TO %[3]s;
 DO $ROT$
 DECLARE r record;
@@ -749,7 +881,7 @@ END
 $ROT$;
 CREATE TABLE %[1]s.%[2]s (LIKE %[1]s.%[3]s INCLUDING ALL);
 COMMIT;
-`, schema, audit, archive, lockTimeout)
+`, schema, audit, archive, lockTimeout, lockKey, rotateSkipToken, newestSeen)
 }
 
 func init() {

@@ -80,17 +80,25 @@ func TestVerifyUploadedObject(t *testing.T) {
 }
 
 func TestRotateSQL(t *testing.T) {
-	got := rotateSQL("rearm", "audit", "audit_archive_20260719t120000z_deadbeef", "5s")
+	got := rotateSQL("rearm", "audit", "audit_archive_20260719t120000z_deadbeef", "5s", 1234567890, "audit_archive_20260601t120000z_old")
 	for _, want := range []string{
 		"SET LOCAL lock_timeout = '5s';",
 		"ALTER TABLE rearm.audit RENAME TO audit_archive_20260719t120000z_deadbeef;",
 		"'rearm.audit_archive_20260719t120000z_deadbeef'::regclass",
 		"CREATE TABLE rearm.audit (LIKE rearm.audit_archive_20260719t120000z_deadbeef INCLUDING ALL);",
 		"COMMIT;",
+		// concurrency guard: advisory lock + supersession check, before the rename
+		"pg_try_advisory_xact_lock(1234567890)",
+		"tablename > 'audit_archive_20260601t120000z_old'",
+		"AUDIT_ROTATE_SKIP",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rotateSQL missing %q in:\n%s", want, got)
 		}
+	}
+	// the guard must run BEFORE the rename, or a concurrent run could already have renamed
+	if strings.Index(got, "pg_try_advisory_xact_lock") > strings.Index(got, "ALTER TABLE rearm.audit RENAME") {
+		t.Errorf("advisory-lock guard must precede the RENAME in:\n%s", got)
 	}
 }
 
@@ -99,8 +107,8 @@ func TestRotateSQL(t *testing.T) {
 // archives (the norm under retention) collide on `audit_pkey_<sfx>` and the second
 // rotation fails with `relation "audit_pkey_..." already exists`.
 func TestRotateSQL_RenameSuffixIsPerArchive(t *testing.T) {
-	a1 := rotateSQL("rearm", "audit", "audit_archive_20260720t100100z_05196fcc", "5s")
-	a2 := rotateSQL("rearm", "audit", "audit_archive_20260720t112820z_d2337e60", "5s")
+	a1 := rotateSQL("rearm", "audit", "audit_archive_20260720t100100z_05196fcc", "5s", 1, "")
+	a2 := rotateSQL("rearm", "audit", "audit_archive_20260720t112820z_d2337e60", "5s", 1, "")
 
 	if !strings.Contains(a1, "substr(md5('audit_archive_20260720t100100z_05196fcc'), 1, 8)") {
 		t.Errorf("rename suffix not derived from archive name in:\n%s", a1)
@@ -133,10 +141,87 @@ func TestListArchivesSQL_Anchored(t *testing.T) {
 
 func TestDropArchiveSQL(t *testing.T) {
 	got := dropArchiveSQL("rearm", "audit_archive_x", "5s")
-	for _, want := range []string{"SET LOCAL lock_timeout = '5s';", "DROP TABLE rearm.audit_archive_x;", "COMMIT;"} {
+	// IF EXISTS makes a concurrent double-drop (two overlapping runs) a benign no-op.
+	for _, want := range []string{"SET LOCAL lock_timeout = '5s';", "DROP TABLE IF EXISTS rearm.audit_archive_x;", "COMMIT;"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("dropArchiveSQL missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+func TestNewestArchive(t *testing.T) {
+	archives := []string{
+		"audit_archive_20260601t120000z_a", // older
+		"audit_archive_20260719t120000z_b", // newest
+		"audit_archive_20260610t120000z_c",
+		"audit_archive_notatimestamp_d", // unparseable -> skipped
+	}
+	name, rot, ok := newestArchive(archives, "audit")
+	if !ok || name != "audit_archive_20260719t120000z_b" {
+		t.Fatalf("newestArchive = %q, %v; want the 07-19 archive", name, ok)
+	}
+	if !rot.Equal(time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)) {
+		t.Errorf("rot = %v, want 2026-07-19T12:00:00Z", rot)
+	}
+	if _, _, ok := newestArchive(nil, "audit"); ok {
+		t.Error("newestArchive(nil) should report ok=false")
+	}
+	if _, _, ok := newestArchive([]string{"audit_archive_notatimestamp_x"}, "audit"); ok {
+		t.Error("newestArchive with only unparseable names should report ok=false")
+	}
+}
+
+// rotationDecision is the gate that decouples rotation from cron cadence.
+func TestRotationDecision(t *testing.T) {
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	newest := func(daysAgo float64) time.Time { return now.Add(-time.Duration(daysAgo*24) * time.Hour) }
+	cases := []struct {
+		name       string
+		cfg        *config.AppConfig
+		haveNewest bool
+		newestRot  time.Time
+		want       bool
+	}{
+		{"interval off (0) -> always rotate", &config.AppConfig{RotationInterval: 0}, true, newest(1), true},
+		{"drain-backlog -> always rotate", &config.AppConfig{RotationInterval: 30, DrainBacklog: true}, true, newest(1), true},
+		{"no archive -> rotate (bootstrap)", &config.AppConfig{RotationInterval: 30}, false, time.Time{}, true},
+		{"newest younger than interval -> skip", &config.AppConfig{RotationInterval: 30}, true, newest(29), false},
+		{"newest older than interval -> rotate", &config.AppConfig{RotationInterval: 30}, true, newest(31), true},
+		{"newest just under interval -> skip", &config.AppConfig{RotationInterval: 14}, true, newest(13.9), false},
+		{"newest just over interval -> rotate", &config.AppConfig{RotationInterval: 14}, true, newest(14.1), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := rotationDecision(tc.cfg, now, tc.newestRot, tc.haveNewest)
+			if got != tc.want {
+				t.Errorf("rotate = %v, want %v (reason %q)", got, tc.want, reason)
+			}
+			if !got && reason == "" {
+				t.Error("a skip must carry a human-readable reason")
+			}
+		})
+	}
+}
+
+func TestAdvisoryLockKey(t *testing.T) {
+	// stable and table-scoped: same input -> same key; different table -> different key.
+	if advisoryLockKey("rearm", "audit") != advisoryLockKey("rearm", "audit") {
+		t.Error("advisoryLockKey not stable for the same schema.table")
+	}
+	if advisoryLockKey("rearm", "audit") == advisoryLockKey("rearm", "other") {
+		t.Error("advisoryLockKey should differ for a different table (else unrelated rotations block each other)")
+	}
+}
+
+func TestIsRotateSkip(t *testing.T) {
+	if !isRotateSkip(fmt.Errorf("psql exec failed: ERROR: AUDIT_ROTATE_SKIP: superseded")) {
+		t.Error("isRotateSkip should recognize the skip token in a wrapped psql error")
+	}
+	if isRotateSkip(errors.New("some other failure")) {
+		t.Error("isRotateSkip must not match an unrelated error")
+	}
+	if isRotateSkip(nil) {
+		t.Error("isRotateSkip(nil) must be false")
 	}
 }
 

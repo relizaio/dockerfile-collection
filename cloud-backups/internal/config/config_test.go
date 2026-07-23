@@ -466,13 +466,22 @@ func TestValidatePGAuditRotate(t *testing.T) {
 		t.Errorf("explicit --allow-unencrypted should pass: %v", err)
 	}
 	bad := map[string]func(*AppConfig){
-		"bad schema":    func(c *AppConfig) { c.PGSchema = "rea rm" },
-		"bad table":     func(c *AppConfig) { c.AuditTable = "audit;drop" },
-		"long table":    func(c *AppConfig) { c.AuditTable = "a_very_long_audit_table_name_wont_fit" },
-		"neg retention": func(c *AppConfig) { c.RetentionDays = -1 },
-		"empty lock":    func(c *AppConfig) { c.LockTimeout = "" },
-		"missing db":    func(c *AppConfig) { c.PGDatabase = "" },
-		"missing buck":  func(c *AppConfig) { c.AWSBucket = "" },
+		"bad schema":           func(c *AppConfig) { c.PGSchema = "rea rm" },
+		"bad table":            func(c *AppConfig) { c.AuditTable = "audit;drop" },
+		"long table":           func(c *AppConfig) { c.AuditTable = "a_very_long_audit_table_name_wont_fit" },
+		"neg retention":        func(c *AppConfig) { c.RetentionDays = -1 },
+		"huge retention":       func(c *AppConfig) { c.RetentionDays = maxAuditDays + 1 },
+		"neg interval":         func(c *AppConfig) { c.RotationInterval = -1 },
+		"interval > retention": func(c *AppConfig) { c.RotationInterval = 31 }, // retention is 30
+		"empty lock":           func(c *AppConfig) { c.LockTimeout = "" },
+		"missing db":           func(c *AppConfig) { c.PGDatabase = "" },
+		"missing buck":         func(c *AppConfig) { c.AWSBucket = "" },
+	}
+	// valid interval settings: off (0) and == retention (single-archive)
+	for _, iv := range []int{0, 15, 30} {
+		if err := (func() *AppConfig { c := base(); c.RotationInterval = iv; return c })().ValidatePGAuditRotate(); err != nil {
+			t.Errorf("rotation-interval-days=%d (<= retention) should pass: %v", iv, err)
+		}
 	}
 	for name, mut := range bad {
 		t.Run(name, func(t *testing.T) {
