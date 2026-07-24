@@ -164,22 +164,34 @@ func runPGAuditRotate() error {
 	// live-read data on a deployment that does have them; --drop-instance-rows is the
 	// conscious override. Only meaningful pre-rotation (the fresh table has none), so
 	// on the steady-state cron this is a cheap count returning 0.
+	//
+	// This guard is SPECIFIC to the generic audit table's frozen-instances semantics:
+	// it only applies to a table that HAS an entity_name column. Another rotated table
+	// (e.g. metrics_audit) has no such column and no such rows, so the guard is skipped
+	// there -- and running the count unconditionally would error on the missing column.
 	if !cfg.DropInstanceRows {
-		rows, err := pgClient.QueryRows(ctx, countInstancesSQL(cfg.PGSchema, cfg.AuditTable))
+		hasEntityName, err := pgClient.QueryRows(ctx, columnExistsSQL(cfg.PGSchema, cfg.AuditTable, "entity_name"))
 		if err != nil {
-			slog.Error("instances_precount_failed", "error", err.Error())
+			slog.Error("entity_name_column_check_failed", "error", err.Error())
 			return err
 		}
-		// Proceed only on a definitive count of exactly 0; refuse on any rows OR an
-		// unexpected result shape (never assume zero from an ambiguous answer).
-		if len(rows) != 1 || rows[0] != "0" {
-			got := "an unexpected count result"
-			if len(rows) == 1 {
-				got = rows[0] + " entity_name='instances' row(s)"
+		if len(hasEntityName) == 1 && hasEntityName[0] == "t" {
+			rows, err := pgClient.QueryRows(ctx, countInstancesSQL(cfg.PGSchema, cfg.AuditTable))
+			if err != nil {
+				slog.Error("instances_precount_failed", "error", err.Error())
+				return err
 			}
-			err := fmt.Errorf("%s.%s returned %s still read by the app (InstanceService); audit-rotate does not carry them forward, so the app's instance-revision reads would return empty once they age out of the DB (the rows are still backed up to the permanent bucket). Set --drop-instance-rows to proceed as a conscious cutover", cfg.PGSchema, cfg.AuditTable, got)
-			slog.Error("instances_rows_present_refusing", "error", err.Error())
-			return err
+			// Proceed only on a definitive count of exactly 0; refuse on any rows OR an
+			// unexpected result shape (never assume zero from an ambiguous answer).
+			if len(rows) != 1 || rows[0] != "0" {
+				got := "an unexpected count result"
+				if len(rows) == 1 {
+					got = rows[0] + " entity_name='instances' row(s)"
+				}
+				err := fmt.Errorf("%s.%s returned %s still read by the app (InstanceService); audit-rotate does not carry them forward, so the app's instance-revision reads would return empty once they age out of the DB (the rows are still backed up to the permanent bucket). Set --drop-instance-rows to proceed as a conscious cutover", cfg.PGSchema, cfg.AuditTable, got)
+				slog.Error("instances_rows_present_refusing", "error", err.Error())
+				return err
+			}
 		}
 	}
 
@@ -695,6 +707,14 @@ func assertNoOwnedSequenceSQL(schema, audit string) string {
 // rather than silently lose live-read data.
 func countInstancesSQL(schema, audit string) string {
 	return fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE entity_name = 'instances';", schema, audit)
+}
+
+// columnExistsSQL returns 't'/'f' for whether the table has the named column. Used to
+// scope the entity_name-specific instances preflight to tables that actually have that
+// column (the generic audit table); a table without it -- e.g. metrics_audit -- skips the
+// guard rather than erroring on the missing column.
+func columnExistsSQL(schema, table, column string) string {
+	return fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '%s' AND table_name = '%s' AND column_name = '%s');", schema, table, column)
 }
 
 // nonOwnerGrantsSQL lists the roles (or PUBLIC) that hold a GRANT on the audit table

@@ -234,6 +234,18 @@ func TestCountInstancesSQL(t *testing.T) {
 	}
 }
 
+// columnExistsSQL scopes the entity_name instances guard to tables that have the column
+// (the generic audit table), so a table without it (e.g. metrics_audit) skips the guard
+// instead of erroring on the missing column.
+func TestColumnExistsSQL(t *testing.T) {
+	got := columnExistsSQL("rearm", "metrics_audit", "entity_name")
+	for _, want := range []string{"SELECT EXISTS", "information_schema.columns", "table_schema = 'rearm'", "table_name = 'metrics_audit'", "column_name = 'entity_name'"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("columnExistsSQL missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestNonOwnerGrantsSQL(t *testing.T) {
 	got := nonOwnerGrantsSQL("rearm", "audit")
 	for _, want := range []string{"aclexplode(c.relacl)", "'rearm.audit'::regclass", "acl.grantee <> c.relowner", "'PUBLIC'"} {
