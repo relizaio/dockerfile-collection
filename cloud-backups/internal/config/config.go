@@ -41,6 +41,7 @@ type AppConfig struct {
 	PGSchema         string `mapstructure:"pg-schema"`
 	AuditTable       string `mapstructure:"audit-table"`
 	RetentionDays    int    `mapstructure:"audit-retention-days"`
+	RotationInterval int    `mapstructure:"rotation-interval-days"`
 	LockTimeout      string `mapstructure:"lock-timeout"`
 	AllowUnencrypted bool   `mapstructure:"allow-unencrypted"`
 	VerifyRestore    bool   `mapstructure:"verify-restore"`
@@ -170,6 +171,11 @@ func (c *AppConfig) ValidatePGBackup() error {
 }
 
 // ValidatePGAuditRotate checks all fields required for the pg audit-rotate command.
+// maxAuditDays bounds retention / rotation-interval day counts so the "now - N days"
+// cutoff can't overflow an int64 time.Duration (nanoseconds overflow at ~106,751 days /
+// 292 years). 100 years is far beyond any real retention and safely clear of the limit.
+const maxAuditDays = 36500
+
 func (c *AppConfig) ValidatePGAuditRotate() error {
 	if _, err := exec.LookPath("psql"); err != nil {
 		return fmt.Errorf("psql not found in PATH: %w", err)
@@ -192,8 +198,24 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 	if len(c.AuditTable) > 63-34 {
 		return fmt.Errorf("--audit-table / AUDIT_TABLE too long (%d chars); max 29 so the archive name stays within Postgres's 63-byte identifier limit", len(c.AuditTable))
 	}
-	if c.RetentionDays < 0 {
-		return fmt.Errorf("--audit-retention-days / AUDIT_RETENTION_DAYS must be >= 0, got %d", c.RetentionDays)
+	if c.RetentionDays < 0 || c.RetentionDays > maxAuditDays {
+		return fmt.Errorf("--audit-retention-days / AUDIT_RETENTION_DAYS must be between 0 and %d, got %d", maxAuditDays, c.RetentionDays)
+	}
+	// rotation-interval-days decouples ROTATION cadence from the CRON cadence: the cron
+	// reconciles every run, but a new archive is cut only when the newest existing one is
+	// >= this many days old (0 = OFF = rotate every run, today's behavior). This is what
+	// lets a fast cron (per-minute .. daily) keep ~retention/interval coexisting archives
+	// instead of one per run.
+	if c.RotationInterval < 0 {
+		return fmt.Errorf("--rotation-interval-days / ROTATION_INTERVAL_DAYS must be >= 0, got %d", c.RotationInterval)
+	}
+	// interval > retention is degenerate: the lone archive is dropped at retention age
+	// (before the interval elapses), so the "no archive -> rotate" arm fires and the
+	// effective interval collapses back to retention. Reject rather than silently mislead.
+	// interval <= retention (which is itself capped at maxAuditDays above) also bounds the
+	// "now - interval days" cutoff away from int64 time.Duration overflow, so no separate cap.
+	if c.RotationInterval > c.RetentionDays {
+		return fmt.Errorf("--rotation-interval-days / ROTATION_INTERVAL_DAYS (%d) must be <= --audit-retention-days (%d): a larger interval is degenerate (retention drops the archive before the interval elapses)", c.RotationInterval, c.RetentionDays)
 	}
 	if !pgDuration.MatchString(c.LockTimeout) {
 		return fmt.Errorf("--lock-timeout / LOCK_TIMEOUT must be a PostgreSQL duration like 5s or 500ms, got %q", c.LockTimeout)
