@@ -423,7 +423,7 @@ func (b *pgArchiveBackend) verifyCtx(ctx context.Context) (context.Context, cont
 
 // BackupAndVerify dumps the archive to a DETERMINISTIC per-archive key, then verifies
 // it landed intact before the caller drops it: upload success (on real AWS, S3
-// verifies every part's SHA-256 server-side), a HeadObject size match, and a
+// verifies every part's SHA-256 server-side), a stored-size match, and a
 // whole-object SHA-256 recorded as a <key>.sha256 sidecar. With --verify-restore it
 // additionally re-downloads, decrypts, runs pg_restore -l (proves the archive is a
 // RESTORABLE dump, not just intact bytes), and matches the SHA-256. NOTE: without
@@ -472,7 +472,7 @@ func (b *pgArchiveBackend) BackupAndVerify(ctx context.Context, archive string, 
 func (b *pgArchiveBackend) verifyUploadedObject(ctx context.Context, key string, wantBytes int64, wantSHA256 string) error {
 	info, err := b.store.Head(ctx, key)
 	if err != nil {
-		return fmt.Errorf("post-upload HeadObject failed for %s: %w", key, err)
+		return fmt.Errorf("post-upload existence/size check failed for %s: %w", key, err)
 	}
 	if info.Size != wantBytes {
 		return fmt.Errorf("uploaded size mismatch for %s: streamed %d, stored %d", key, wantBytes, info.Size)
@@ -493,7 +493,7 @@ func (b *pgArchiveBackend) verifyUploadedObject(ctx context.Context, key string,
 // to wantSHA256 (independent, end-to-end byte integrity) AND -- decrypting first if
 // needed -- that `pg_restore -l` accepts it (a structurally valid, restorable dump).
 // The download is teed into the hasher while pg_restore consumes the decrypted stream.
-// total is the exact object size (from HeadObject), so re-download progress can report
+// total is the exact stored object size, so re-download progress can report
 // a real (not estimated) percent-done and ETA; the long re-download would otherwise be
 // silent and look like a hang.
 func (b *pgArchiveBackend) verifyRestorable(ctx context.Context, key, wantSHA256 string, total int64) error {
@@ -565,7 +565,7 @@ func (b *pgArchiveBackend) readSidecar(ctx context.Context, key string) (string,
 
 // hasBackup reports whether the archive's backup is durably present in the bucket.
 // It requires BOTH the dump object AND its .sha256 sidecar (the sidecar is written
-// LAST, after the dump upload + a HeadObject size match, so in normal operation its
+// LAST, after the dump upload + a stored-size match, so in normal operation its
 // presence already implies a complete upload; requiring the dump too makes recovery
 // self-heal the anomaly where the dump was later deleted out-of-band -- either
 // missing => not-backed-up => re-dump, which overwrites both keys). This state lives

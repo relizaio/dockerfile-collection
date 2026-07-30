@@ -14,7 +14,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	tmtypes "github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+)
+
+const (
+	// statListMaxKeys bounds each listing page used to look a single key up. At most
+	// four keys can share a dump key as their prefix (the dump, its .sha256 sidecar,
+	// and the same pair with an .age suffix if --encryption-password was toggled), so
+	// one page always suffices in practice; statListMaxPages is a safety net for a
+	// server that pads pages with entries we filter out.
+	statListMaxKeys  = 10
+	statListMaxPages = 8
 )
 
 type s3Provider struct {
@@ -62,33 +73,85 @@ func (p *s3Provider) UploadStream(ctx context.Context, remotePath string, reader
 	return err
 }
 
-// mapS3NotFound maps a HeadObject error to ErrNotFound when it is a definitive 404
-// (HeadObject -> NotFound, or NoSuchKey), so callers can distinguish a confirmed
-// absence from a transient/credential error (e.g. throttling, AccessDenied). Any
-// other error is passed through as a generic failure.
-func mapS3NotFound(remotePath string, err error) error {
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
-		if code := apiErr.ErrorCode(); code == "NotFound" || code == "NoSuchKey" {
-			return fmt.Errorf("head object %q: %w", remotePath, ErrNotFound)
+// statFromListing scans a listing page (taken with Prefix set to the full key) for the
+// EXACT key. It deliberately does not assume any ordering: AWS documents that general
+// purpose buckets list lexicographically but directory buckets do not, and an
+// S3-compatible gateway need not sort either -- so picking contents[0] could mistake the
+// "<key>.sha256" sidecar for the dump and report a phantom absence. Not-in-this-page is
+// reported as ErrNotFound; the caller decides whether that is definitive by looking at
+// whether the listing was truncated.
+func statFromListing(remotePath string, contents []types.Object) (*ObjectInfo, error) {
+	for _, o := range contents {
+		if o.Key == nil || *o.Key != remotePath {
+			continue
 		}
+		// An exact key with no size is an unusable answer, not an absence: reporting
+		// ErrNotFound would tell the caller "not backed up" about an object that exists.
+		if o.Size == nil {
+			return nil, fmt.Errorf("list objects for %q returned no Size", remotePath)
+		}
+		return &ObjectInfo{Size: *o.Size}, nil
 	}
-	return fmt.Errorf("head object %q failed: %w", remotePath, err)
+	return nil, fmt.Errorf("list objects for %q: %w", remotePath, ErrNotFound)
 }
 
-// Head returns the stored object's size via a HeadObject call (no body download).
+// listAccessHint annotates a denial with the permission the caller is missing. This
+// lookup is the first bucket call every run makes, so an unannotated 403 here is the
+// single most likely misconfiguration -- and it previously surfaced as an opaque error
+// that cost a live debugging session.
+func listAccessHint(remotePath string, err error) error {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "AccessDenied", "Forbidden", "AllAccessDisabled":
+			return fmt.Errorf("list objects for %q denied -- the bucket credentials need s3:ListBucket on the BUCKET arn (arn:aws:s3:::<bucket>, no /*): %w", remotePath, err)
+		}
+	}
+	return fmt.Errorf("list objects for %q failed: %w", remotePath, err)
+}
+
+// Head returns the stored object's size without reading its body. It deliberately uses
+// ListObjectsV2 (IAM: s3:ListBucket) instead of HeadObject: there is no s3:HeadObject
+// action -- HeadObject is authorized by s3:GetObject, which ALSO grants reading every
+// archive's contents. The steady-state rotate/backup/drop path only ever asks "does this
+// key exist, and how big is it", so it must not require content-read on the permanent
+// bucket; GetObject stays confined to the opt-in --verify-restore path (DownloadStream /
+// readSidecar).
+//
+// It also makes absence unambiguous: HeadObject returns 403 AccessDenied rather than 404
+// for a MISSING key when the caller lacks s3:ListBucket, and a 403 cannot safely be read
+// as "not backed up" -- so on a least-privilege policy the self-healing
+// "no backup -> re-dump instead of drop" path was unreachable.
+//
+// Absence is only reported once a listing says so without being truncated (an empty but
+// truncated page is legal, e.g. when the page's keys are all delete markers). This
+// assumes list-after-write consistency, which AWS has guaranteed since Dec 2020 and
+// MinIO/Ceph/R2 also document; on a store without it, an upload could momentarily look
+// absent (harmless: a re-dump, never a drop -- see backupIsDroppable).
 func (p *s3Provider) Head(ctx context.Context, remotePath string) (*ObjectInfo, error) {
-	out, err := p.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(p.bucket),
-		Key:    aws.String(remotePath),
-	})
-	if err != nil {
-		return nil, mapS3NotFound(remotePath, err)
+	var token *string
+	for page := 0; page < statListMaxPages; page++ {
+		out, err := p.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(p.bucket),
+			Prefix:            aws.String(remotePath),
+			MaxKeys:           aws.Int32(statListMaxKeys),
+			ContinuationToken: token,
+		})
+		if err != nil {
+			return nil, listAccessHint(remotePath, err)
+		}
+		info, err := statFromListing(remotePath, out.Contents)
+		if !errors.Is(err, ErrNotFound) {
+			return info, err // a hit, or an unusable answer that must not read as absence
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			return nil, err
+		}
+		token = out.NextContinuationToken
 	}
-	if out.ContentLength == nil {
-		return nil, fmt.Errorf("head object %q returned no ContentLength", remotePath)
-	}
-	return &ObjectInfo{Size: *out.ContentLength}, nil
+	// Never claim absence we did not confirm: an unconfirmed answer must stay ambiguous
+	// so callers neither re-dump blindly nor drop.
+	return nil, fmt.Errorf("list objects for %q: no definitive answer after %d pages", remotePath, statListMaxPages)
 }
 
 func (p *s3Provider) DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error {
