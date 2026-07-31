@@ -8,7 +8,78 @@ on:
 name: Build Component Container Images And Submit Metadata To Reliza Hub
 
 jobs:
+  # Only build the images whose directory actually changed. Without this a one-line edit
+  # anywhere rebuilds all 18 images (~9 min) and drags every unrelated job's flakiness into
+  # the result. Pushes to main deliberately ignore the filter and build everything, which is
+  # what keeps base images refreshed with upstream patches -- see the `|| main` clause below.
+  # Mirrors the detect-job pattern already used in relizaio/rearm.
+  detect:
+    name: Detect changed images
+    runs-on: ubuntu-latest
+    outputs:
+      postgresql_17:         ${{ steps.f.outputs.postgresql_17 }}
+      sealed_secrets:        ${{ steps.f.outputs.sealed_secrets }}
+      verdaccio:             ${{ steps.f.outputs.verdaccio }}
+      kubectl:               ${{ steps.f.outputs.kubectl }}
+      maven_postgresql:      ${{ steps.f.outputs.maven_postgresql }}
+      jq:                    ${{ steps.f.outputs.jq }}
+      awscli:                ${{ steps.f.outputs.awscli }}
+      reliza_watcher:        ${{ steps.f.outputs.reliza_watcher }}
+      helmpush:              ${{ steps.f.outputs.helmpush }}
+      helm_reliza:           ${{ steps.f.outputs.helm_reliza }}
+      postgresql_awscli:     ${{ steps.f.outputs.postgresql_awscli }}
+      oras_awscli:           ${{ steps.f.outputs.oras_awscli }}
+      oci_backups:           ${{ steps.f.outputs.oci_backups }}
+      cloud_backups:         ${{ steps.f.outputs.cloud_backups }}
+      postgresql_backups:    ${{ steps.f.outputs.postgresql_backups }}
+      skopeo_backuper:       ${{ steps.f.outputs.skopeo_backuper }}
+      postgres_postgis:      ${{ steps.f.outputs.postgres_postgis }}
+      azcopy:                ${{ steps.f.outputs.azcopy }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: f
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          filters: |
+            postgresql_17:
+              - 'postgresql-17/**'
+            sealed_secrets:
+              - 'sealed-secrets-controller/**'
+            verdaccio:
+              - 'verdaccio/**'
+            kubectl:
+              - 'kubectl/**'
+            maven_postgresql:
+              - 'maven-postgresql/**'
+            jq:
+              - 'jq/**'
+            awscli:
+              - 'awscli/**'
+            reliza_watcher:
+              - 'reliza-watcher/**'
+            helmpush:
+              - 'helmpush/**'
+            helm_reliza:
+              - 'helm-reliza/**'
+            postgresql_awscli:
+              - 'postgresql-awscli/**'
+            oras_awscli:
+              - 'oras-awscli/**'
+            oci_backups:
+              - 'oci-backups/**'
+            cloud_backups:
+              - 'cloud-backups/**'
+            postgresql_backups:
+              - 'postgresql-backups/**'
+            skopeo_backuper:
+              - 'skopeo-backuper/**'
+            postgres_postgis:
+              - 'postgres-postgis/**'
+            azcopy:
+              - 'azcopy/**'
   build-postgresql:
+    needs: detect
+    if: needs.detect.outputs.postgresql_17 == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     name: Build And Push ReARM PostgreSQL
@@ -33,6 +104,8 @@ jobs:
           source_code_sbom_type: 'none'
           enable_public_cosign_sigstore: 'true'
   build-sealed-secrets-controller:
+    needs: detect
+    if: needs.detect.outputs.sealed_secrets == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     name: Build And Push Sealed Secrets Controller
@@ -55,6 +128,8 @@ jobs:
           source_code_sbom_type: 'none'
           rearm_enable_public_cosign_sigstore: 'true'
   build-reliza-verdaccio:
+    needs: detect
+    if: needs.detect.outputs.verdaccio == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     name: Build And Push Reliza Verdaccio
@@ -80,6 +155,8 @@ jobs:
           source_code_sbom_type: 'npm'
           enable_public_cosign_sigstore: 'true'
   build-reliza-kubectl:
+    needs: detect
+    if: needs.detect.outputs.kubectl == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     name: Build And Push Reliza Kubectl
@@ -102,6 +179,8 @@ jobs:
           source_code_sbom_type: 'none'
           rearm_enable_public_cosign_sigstore: 'true'
   build-maven-postgresql:
+    needs: detect
+    if: needs.detect.outputs.maven_postgresql == 'true' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for Maven Postgresql CI
@@ -116,6 +195,8 @@ jobs:
         path: maven-postgresql
         platform_architectures: 'linux/amd64,linux/arm64'
   build-jq:
+    needs: detect
+    if: needs.detect.outputs.jq == 'true' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for JQ
@@ -130,6 +211,8 @@ jobs:
         path: jq
         platform_architectures: 'linux/amd64,linux/arm64'
   build-awscli:
+    needs: detect
+    if: needs.detect.outputs.awscli == 'true' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for AWS CLI v1
@@ -144,6 +227,8 @@ jobs:
         path: awscli
         platform_architectures: 'linux/amd64,linux/arm64'
   build-reliza-watcher:
+    needs: detect
+    if: needs.detect.outputs.reliza_watcher == 'true' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for kubectl Reliza Watcher image
@@ -158,6 +243,8 @@ jobs:
         path: reliza-watcher
         platform_architectures: 'linux/amd64,linux/arm64'
   build-helmpush:
+    needs: detect
+    if: needs.detect.outputs.helmpush == 'true' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for Reliza Helm Push image
@@ -172,6 +259,8 @@ jobs:
         path: helmpush
         platform_architectures: 'linux/amd64,linux/arm64'
   build-helm-reliza-cli:
+    needs: detect
+    if: needs.detect.outputs.helm_reliza == 'true' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for Helm and Reliza CLI image
@@ -186,6 +275,8 @@ jobs:
         path: helm-reliza
         platform_architectures: 'linux/amd64,linux/arm64'
   build-psql-awscli:
+    needs: detect
+    if: needs.detect.outputs.postgresql_awscli == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -211,6 +302,8 @@ jobs:
           rearm_mirror_api_key: ${{ secrets.REARM_POSTGRESQL_AWSCLI_API_KEY }}
           rearm_mirror_api_url: https://demo.rearmhq.com
   build-oras-awscli:
+    needs: detect
+    if: needs.detect.outputs.oras_awscli == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -235,6 +328,8 @@ jobs:
           rearm_mirror_api_key: ${{ secrets.REARM_ORAS_AWSCLI_API_KEY }}
           rearm_mirror_api_url: https://demo.rearmhq.com
   build-oci-backups:
+    needs: detect
+    if: needs.detect.outputs.oci_backups == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -260,6 +355,8 @@ jobs:
           enable_sbom: true
           source_code_sbom_type: go
   build-cloud-backups:
+    needs: detect
+    if: needs.detect.outputs.cloud_backups == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -285,6 +382,8 @@ jobs:
           enable_sbom: true
           source_code_sbom_type: go
   build-postgresql-backups:
+    needs: detect
+    if: needs.detect.outputs.postgresql_backups == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -311,6 +410,8 @@ jobs:
           source_code_sbom_type: go
 
   build-skopeo-backuper:
+    needs: detect
+    if: needs.detect.outputs.skopeo_backuper == 'true' || github.ref == 'refs/heads/main'
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -332,6 +433,8 @@ jobs:
           enable_sbom: true
           source_code_sbom_type: none
   build-postgres-postgis:
+    needs: detect
+    if: needs.detect.outputs.postgres_postgis == 'true' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for PostgreSQL Postgis
@@ -346,6 +449,8 @@ jobs:
         path: postgres-postgis
         platform_architectures: 'linux/amd64,linux/arm64'
   build-azcopy:
+    needs: detect
+    if: needs.detect.outputs.azcopy == 'true' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Build and submit release for azcopy
