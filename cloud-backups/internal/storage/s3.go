@@ -35,10 +35,14 @@ func newS3Provider(ctx context.Context, cfg *Config) (*s3Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
-	// Only ask S3 to verify a SHA-256 per part on real AWS. A custom endpoint
-	// (MinIO/Ceph/R2/B2/Wasabi via AWS_ENDPOINT_URL[_S3]) may reject the SHA-256
-	// composite/streaming-trailer checksum, which would break EVERY upload mode --
-	// so we don't force it there.
+	// Only force an explicit checksum algorithm on real AWS. A custom endpoint
+	// (MinIO/Ceph/R2/B2/Wasabi via AWS_ENDPOINT_URL[_S3]) may reject a forced
+	// checksum, which would break EVERY upload mode -- too high a price, so those
+	// keep the SDK's own default (CRC32, which for a multipart upload is COMPOSITE).
+	// CONSEQUENCE: the assembled-object verification below is real-AWS only; on an
+	// S3-compatible endpoint a multipart upload is still per-part checksummed but the
+	// assembly itself is not verified. MinIO was measured to accept CRC32C +
+	// FULL_OBJECT, so this could be relaxed per-endpoint later if a customer needs it.
 	customEndpoint := os.Getenv("AWS_ENDPOINT_URL_S3") != "" || os.Getenv("AWS_ENDPOINT_URL") != ""
 	return &s3Provider{client: s3.NewFromConfig(awsCfg), bucket: cfg.AWSBucket, useChecksum: !customEndpoint}, nil
 }
@@ -51,44 +55,45 @@ func (p *s3Provider) UploadStream(ctx context.Context, remotePath string, reader
 		Body:   reader,
 	}
 	if p.useChecksum {
-		// S3 verifies a SHA-256 of every (multipart) part server-side and refuses
-		// the object on any mismatch -- a "completed" upload is integrity-checked.
-		in.ChecksumAlgorithm = tmtypes.ChecksumAlgorithmSha256
+		// FULL_OBJECT (not the default COMPOSITE) is what makes S3 verify the ASSEMBLED
+		// object server-side. CompleteMultipartUpload validates the parts you LIST, not
+		// that you listed them all: measured, listing only part 1 of 2 uploaded parts is
+		// accepted and yields a silently half-length object. A composite checksum is a
+		// hash OF the part hashes and cannot detect that; a full-object checksum is a
+		// hash of the assembled bytes and does (an under-listed completion is rejected
+		// with XAmzContentChecksumMismatch). That matters because nothing re-reads the
+		// object afterwards -- this upload is the only integrity check before the DROP.
+		//
+		// CRC32C rather than SHA-256 because SHA-256 does not support FULL_OBJECT, and
+		// transfermanager does not expose CRC64NVME. The whole-object SHA-256 the tool
+		// computes itself still goes into the .sha256 sidecar for --verify-restore, so
+		// cryptographic-strength verification remains available on the audit path.
+		in.ChecksumAlgorithm = tmtypes.ChecksumAlgorithmCrc32c
+		in.ChecksumType = tmtypes.ChecksumTypeFullObject
 	}
 	_, err := tm.UploadObject(ctx, in)
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("upload interrupted: %w", err)
 	}
-	return err
+	return uploadAccessHint(remotePath, err)
 }
 
-// mapS3NotFound maps a HeadObject error to ErrNotFound when it is a definitive 404
-// (HeadObject -> NotFound, or NoSuchKey), so callers can distinguish a confirmed
-// absence from a transient/credential error (e.g. throttling, AccessDenied). Any
-// other error is passed through as a generic failure.
-func mapS3NotFound(remotePath string, err error) error {
+// uploadAccessHint annotates a denial with the permission the caller is missing. The
+// steady-state path needs only write access, so an unannotated 403 here is the most
+// likely misconfiguration by far -- and an opaque one previously cost a live debugging
+// session.
+func uploadAccessHint(remotePath string, err error) error {
+	if err == nil {
+		return nil
+	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
-		if code := apiErr.ErrorCode(); code == "NotFound" || code == "NoSuchKey" {
-			return fmt.Errorf("head object %q: %w", remotePath, ErrNotFound)
+		switch apiErr.ErrorCode() {
+		case "AccessDenied", "Forbidden", "AllAccessDisabled":
+			return fmt.Errorf("upload of %q denied -- the bucket credentials need s3:PutObject on the objects (arn:aws:s3:::<bucket>/<prefix>-*) and s3:AbortMultipartUpload for interrupted multipart uploads: %w", remotePath, err)
 		}
 	}
-	return fmt.Errorf("head object %q failed: %w", remotePath, err)
-}
-
-// Head returns the stored object's size via a HeadObject call (no body download).
-func (p *s3Provider) Head(ctx context.Context, remotePath string) (*ObjectInfo, error) {
-	out, err := p.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(p.bucket),
-		Key:    aws.String(remotePath),
-	})
-	if err != nil {
-		return nil, mapS3NotFound(remotePath, err)
-	}
-	if out.ContentLength == nil {
-		return nil, fmt.Errorf("head object %q returned no ContentLength", remotePath)
-	}
-	return &ObjectInfo{Size: *out.ContentLength}, nil
+	return err
 }
 
 func (p *s3Provider) DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error {

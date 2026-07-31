@@ -2,32 +2,24 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 )
 
 const MaxRetries = 5
 
-// ErrNotFound is returned (wrapped) by Head when the object definitively does not
-// exist. Callers use errors.Is(err, ErrNotFound) to distinguish a confirmed absence
-// (safe to treat as "not backed up") from a transient/ambiguous error (which must
-// NOT be read as absence -- e.g. before an irreversible DROP).
-var ErrNotFound = errors.New("object not found")
-
-// ObjectInfo is the subset of stored-object metadata callers need to verify an
-// upload landed intact without downloading it.
-type ObjectInfo struct {
-	Size int64
-}
-
 // Provider is the interface all cloud storage backends must implement.
+//
+// There is deliberately NO metadata/existence lookup here. audit-rotate backs an archive
+// up and DROPs it in the SAME run, so it never has to ask the bucket "is this still
+// backed up?" on a later run -- which is what let the steady-state credential drop to
+// write-only. Adding a Head/Stat method back would reintroduce that requirement: on S3
+// there is no s3:HeadObject action (HeadObject is authorized by s3:GetObject, which also
+// grants reading every archive), and Azure does not separate "list blobs" from "read a
+// blob" at all. DownloadStream is the sole read, used only by the opt-in --verify-restore.
 type Provider interface {
 	UploadStream(ctx context.Context, remotePath string, reader io.Reader) error
 	DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error
-	// Head returns object metadata (size) without downloading the body, for a
-	// cheap post-upload existence/size check.
-	Head(ctx context.Context, remotePath string) (*ObjectInfo, error)
 }
 
 // Config holds credentials passed down from the CLI.

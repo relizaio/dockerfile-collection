@@ -236,27 +236,29 @@ cloud-backup pg restore \
 
 ### `pg audit-rotate` flags
 
-Relieves disk pressure from a large, **write-only** audit table (per-entity revision snapshots) without a partitioning migration or any application change. Each run renames the live table aside, stands up a fresh identical table that immediately receives new writes (carrying forward only the rows that are read), streams the rotated-out archive to storage, and only then `DROP`s it (instant reclaim).
+Relieves disk pressure from a large, **write-only** audit table (per-entity revision snapshots) without a partitioning migration or any application change. Each run renames the live table aside and stands up a fresh EMPTY table that immediately receives new writes, then retains the archive on disk until it ages out -- at which point one run streams it to storage and `DROP`s it (instant reclaim).
 
 Design notes:
 - The rename holds an `ACCESS EXCLUSIVE` lock only for a catalog-only operation (sub-second even on large tables). `--lock-timeout` makes it **fail-safe**: on contention the rotate rolls back untouched and retries next run.
-- The `DROP` is the sole irreversible step and runs **only after a verified upload**. By default, verification is a **byte-integrity** gate: the upload completed (on real AWS, S3 verifies a SHA-256 of every part server-side and refuses on mismatch) **+** a `HeadObject` size match **+** a whole-object SHA-256 written as a `<key>.sha256` sidecar. This does **not** by itself prove the archive is *restorable*.
-- `--verify-restore` upgrades that to a **restorability** check: it re-downloads the object, **decrypts** it, runs **`pg_restore -l`** (proves it's a structurally valid, decryptable dump — catches a truncated/corrupt archive or a wrong/lost age passphrase before the source is dropped), and matches the SHA-256. Costs a full re-download -- reserve for first/manual runs.
-
-  Uploads are checksum-verified server-side on **both** backends, at every payload size: real AWS S3 gets a SHA-256 (per part on a multipart upload, whole-object on a small one) and Azure gets a CRC64 (per block, or whole-object for a payload below the block size). So on those two backends `--verify-restore` is about proving *restorability* -- a valid, decryptable dump -- not about catching corruption in transit. A self-hosted S3-compatible endpoint (MinIO/Ceph) still *receives* the SDK's default CRC32, but whether it validates one is up to that server, so prefer enabling `--verify-restore` there.
-- `--no-drop` runs everything except the drop (and exits non-zero so it can't be mistaken for a completed rotation). `--drop-pending` is the confirm step: it does **not** rotate — it verifies each already-backed-up leftover against its sidecar (+ `pg_restore -l`) and drops only the ones that verify, so you drop the exact object you inspected without re-dumping.
-- Object names are deterministic per archive (`{prefix}-{archive}.dump[.age]`, where `{archive}` carries a unique UTC timestamp): distinct and never overwritten across rotations, while a retry or recovery of the *same* archive reuses the key instead of accumulating duplicates. Point this at a **separate, permanent-retention bucket**, not the expiring DB-backup bucket.
+- **The `DROP` is the sole irreversible step, and it happens in the same run as the archive's backup.** An aged-out archive is dumped, uploaded and only then dropped -- so the drop is authorized by an upload that completed seconds earlier, not by a bucket lookup days later. Uploads are checksum-verified server-side: on **real AWS S3** a *full-object* CRC32C, which verifies the assembled object and so rejects a multipart upload that committed a short part list; on **Azure** a CRC64 per block (or whole-object below the block size), which validates each block but not that the committed block list names them all -- documented Azure behavior with no whole-blob equivalent. On a self-hosted **S3-compatible** endpoint the SDK's default CRC32 is sent (per-part on a multipart upload, whole-object on a small one), but whether that endpoint validates it is up to the server, and the assembly is not verified either way -- prefer `--verify-restore` there. Separately, a truncated `pg_dump` aborts the upload outright, so no object is left behind and nothing is dropped.
+- **Bucket permissions: write-only.** Because nothing is ever read back, the steady-state credential needs only `s3:PutObject` (on `arn:aws:s3:::<bucket>/<dump-prefix>-*`) plus `s3:AbortMultipartUpload` (a multi-GB dump goes multipart, and an interrupted upload aborts it; without this the abort 403s and leaves billed orphan parts). No `s3:GetObject`, no `s3:ListBucket`, no `s3:DeleteObject`. `--verify-restore` is the sole exception: it re-downloads, so it additionally needs `s3:GetObject` (plus `kms:Decrypt` on an SSE-KMS bucket). On Azure the equivalent is blob write, with read only for `--verify-restore`.
+- **The retention window is a disk-relief buffer, not a durability guarantee.** An archive has no permanent-bucket copy until it ages out, so for up to `--audit-retention-days` it exists only in the live database. Decide deliberately: either keep the archive tables **inside** your whole-database backup for that window (they are covered, at the cost of larger DB dumps), or exclude them via `--exclude-table` and accept a single-copy window -- in which case start with a short `--audit-retention-days` (7 rather than 30) so the exposure is bounded.
+- Re-dumping **overwrites** the previous object for that archive (deterministic key). A retry or a crash between upload and `DROP` therefore replaces a possibly-good object with a freshly rolled one, so on Azure the accepted client-assembly residual is re-exposed on each such cycle rather than once. The dump is written before its `.sha256` sidecar, so a failed re-dump can also leave a sidecar describing the previous object until the next successful run.
+- `--verify-restore` upgrades the check to a **restorability** proof: it re-downloads the object, **decrypts** it, runs **`pg_restore -l`** (catching a corrupt archive or a wrong/lost age passphrase before the source is dropped), and matches the SHA-256 recorded in the `<key>.sha256` sidecar. Costs a full re-download and read access -- reserve it for the cutover and for a periodic audit run.
+- Object names are deterministic per archive (`{prefix}-{archive}.dump[.age]`, where `{archive}` carries a unique UTC timestamp): distinct and never overwritten across rotations, while a retry of the *same* archive reuses the key instead of accumulating duplicates. Point this at a **separate, permanent-retention bucket**, not the expiring DB-backup bucket.
 - Runs as the same DB role the application uses, so the fresh table is owned by (and writable by) the app.
 
 | Flag | Env Variable | Description | Default |
 | --- | --- | --- | --- |
 | `--pg-schema` | `PG_SCHEMA` | Schema containing the audit table | `rearm` |
 | `--audit-table` | `AUDIT_TABLE` | Audit table name | `audit` |
-| `--keep-tail-days` | `KEEP_TAIL_DAYS` | Also keep audit rows newer than N days in the live table (0 = keep only the read set) | `0` |
+| `--audit-retention-days` | `AUDIT_RETENTION_DAYS` | Keep each sealed archive on disk until it is older than N days, then back it up and DROP it whole | `30` |
+| `--rotation-interval-days` | `ROTATION_INTERVAL_DAYS` | Cut a new archive only when the newest is >= N days old, decoupling rotation from the cron cadence. `0` = rotate every run. Must be <= retention | `0` |
 | `--lock-timeout` | `LOCK_TIMEOUT` | `lock_timeout` for the rename; on contention the rotate rolls back and retries next run | `5s` |
-| `--no-drop` | `NO_DROP` | Rotate + back up + verify, but do NOT drop the archive (exits non-zero); confirm, then finalize with `--drop-pending` | `false` |
-| `--verify-restore` | `VERIFY_RESTORE` | Before dropping, re-download + decrypt + `pg_restore -l` (proves restorability) + SHA-256 match (full re-download) | `false` |
-| `--drop-pending` | `DROP_PENDING` | Do not rotate; verify each already-backed-up leftover archive against its `.sha256` sidecar (+ `pg_restore -l`) and drop the ones that verify | `false` |
+| `--verify-restore` | `VERIFY_RESTORE` | Before dropping, re-download + decrypt + `pg_restore -l` (proves restorability) + SHA-256 match. Needs read access; costs a full re-download | `false` |
+| `--drain-backlog` | `DRAIN_BACKLOG` | Back up and DROP the archive created THIS run, ignoring retention. For the one-off cutover only -- never for the recurring cron | `false` |
+| `--allow-unencrypted` | `ALLOW_UNENCRYPTED` | Allow writing an UNENCRYPTED dump to the permanent bucket when no `--encryption-password` is set | `false` |
+| `--drop-instance-rows` | `DROP_INSTANCE_ROWS` | Proceed even if the audit table holds frozen `entity_name='instances'` rows still read by the app | `false` |
 
 Shares the `pg` connection flags above and the storage/`--dump-prefix`/`--encryption-password` flags. `PGPASSWORD` must be set in the environment; the role needs write + DDL on the audit table.
 
@@ -264,7 +266,7 @@ Shares the `pg` connection flags above and the storage/`--dump-prefix`/`--encryp
 export PGPASSWORD="secret"
 cloud-backup pg audit-rotate \
   --pg-host my-postgres-host --pg-database mydb --pg-user myuser \
-  --pg-schema rearm --audit-table audit --keep-tail-days 0 \
+  --pg-schema rearm --audit-table audit --audit-retention-days 30 \
   --backup-storage-type s3 \
   --aws-bucket my-PERMANENT-audit-bucket --aws-region us-east-1 \
   --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
