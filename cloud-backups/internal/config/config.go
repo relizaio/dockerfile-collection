@@ -194,7 +194,7 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 	}
 	// The archive name is "<audit>_archive_<16-char utc>_<8 hex>" = <audit>+34 chars.
 	// Postgres truncates identifiers at 63 bytes; truncation would desync the Go name
-	// from the stored name and wedge drop/recovery. Bound the input.
+	// from the stored name and wedge the drop. Bound the input.
 	if len(c.AuditTable) > 63-34 {
 		return fmt.Errorf("--audit-table / AUDIT_TABLE too long (%d chars); max 29 so the archive name stays within Postgres's 63-byte identifier limit", len(c.AuditTable))
 	}
@@ -202,7 +202,7 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 		return fmt.Errorf("--audit-retention-days / AUDIT_RETENTION_DAYS must be between 0 and %d, got %d", maxAuditDays, c.RetentionDays)
 	}
 	// rotation-interval-days decouples ROTATION cadence from the CRON cadence: the cron
-	// reconciles every run, but a new archive is cut only when the newest existing one is
+	// runs Pass 1 every run, but a new archive is cut only when the newest existing one is
 	// >= this many days old (0 = OFF = rotate every run, today's behavior). This is what
 	// lets a fast cron (per-minute .. daily) keep ~retention/interval coexisting archives
 	// instead of one per run.

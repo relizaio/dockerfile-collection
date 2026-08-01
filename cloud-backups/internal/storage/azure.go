@@ -13,7 +13,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 )
 
@@ -53,9 +52,9 @@ func newAzureProvider(ctx context.Context, cfg *Config) (*azureProvider, error) 
 // server-side and rejects the payload on mismatch. Without it Azure receives NO checksum
 // at all, so a "successful" upload means only that bytes arrived, not that they arrived
 // intact -- and this tool DROPs the source table once an upload verifies. The S3 path
-// opts into the same protection (see newS3Provider/UploadStream); this brings Azure to
-// parity, so the cheap existence/size gate can be trusted there instead of requiring a
-// full re-download via --verify-restore.
+// opts into the same protection (see newS3Provider/UploadStream). This is not a
+// nice-to-have: nothing re-reads the object afterwards, so on Azure this checksum is the
+// SOLE integrity check standing between the upload and an irreversible DROP.
 //
 // Cost: ComputeCRC64 hashes from a buffer rather than in-line, and it is applied per
 // BLOCK, so peak memory stays flat in archive size (a 4.5 GB archive costs the same as a
@@ -75,6 +74,11 @@ func azureUploadStreamOptions() *azblob.UploadStreamOptions {
 }
 
 // UploadStream streams the payload to a block blob, checksummed whatever its size.
+//
+// REMOVABLE LATER: the size split below works around an SDK bug that upstream has since
+// fixed -- as of azblob v1.8.1-beta.1 (and main) UploadStreamOptions.getUploadOptions()
+// does copy TransactionalValidation. Do NOT remove it before the pinned version actually
+// contains that fix; v1.8.0, which we pin, does not.
 //
 // The size split is NOT an optimization -- it is required for the checksum to exist at
 // all. azblob's UploadStream short-circuits to a single-shot Put Blob whenever the whole
@@ -116,31 +120,6 @@ func (p *azureProvider) uploadSingleBlock(ctx context.Context, remotePath string
 		return fmt.Errorf("upload interrupted: %w", err)
 	}
 	return err
-}
-
-// mapAzureNotFound maps a GetProperties error to ErrNotFound when it is a definitive
-// missing blob (404 / BlobNotFound), so callers can distinguish a confirmed absence
-// from a transient/credential error. Any other error is passed through as a generic
-// failure. Azure sets the x-ms-error-code header on a HEAD 404, which bloberror.HasCode
-// reads off the *azcore.ResponseError.
-func mapAzureNotFound(remotePath string, err error) error {
-	if bloberror.HasCode(err, bloberror.BlobNotFound) {
-		return fmt.Errorf("get properties for %q: %w", remotePath, ErrNotFound)
-	}
-	return fmt.Errorf("get properties for %q failed: %w", remotePath, err)
-}
-
-// Head returns the stored blob's size via GetProperties (no body download).
-func (p *azureProvider) Head(ctx context.Context, remotePath string) (*ObjectInfo, error) {
-	blobClient := p.client.ServiceClient().NewContainerClient(p.container).NewBlobClient(remotePath)
-	props, err := blobClient.GetProperties(ctx, nil)
-	if err != nil {
-		return nil, mapAzureNotFound(remotePath, err)
-	}
-	if props.ContentLength == nil {
-		return nil, fmt.Errorf("get properties for %q returned no ContentLength", remotePath)
-	}
-	return &ObjectInfo{Size: *props.ContentLength}, nil
 }
 
 func (p *azureProvider) DownloadStream(ctx context.Context, remotePath string, writer io.Writer) error {

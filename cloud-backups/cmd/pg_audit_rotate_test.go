@@ -10,73 +10,88 @@ import (
 	"time"
 
 	"github.com/relizaio/cloud-backup/internal/config"
-	"github.com/relizaio/cloud-backup/internal/storage"
+	"github.com/relizaio/cloud-backup/internal/stats"
 )
 
-// fakeStore is a storage.Provider for unit-testing the post-upload verification and
-// the pre-drop gate. If objects is non-nil, Head answers per-key (present -> size,
-// absent -> ErrNotFound), which the drop-gate tests use. Otherwise it falls back to
-// the single headSize/headErr (the verifyUploadedObject test).
+// fakeStore is a storage.Provider for unit-testing the upload-finalize path.
 type fakeStore struct {
-	headSize  int64
-	headErr   error
-	uploadErr error
+	failOnKey string // fail only this key (e.g. the sidecar), succeed on others
 	uploaded  map[string]bool
-	objects   map[string]int64
 }
 
 func (f *fakeStore) UploadStream(_ context.Context, path string, r io.Reader) error {
 	_, _ = io.Copy(io.Discard, r)
-	if f.uploadErr == nil {
-		if f.uploaded == nil {
-			f.uploaded = map[string]bool{}
-		}
-		f.uploaded[path] = true
+	if f.failOnKey != "" && path == f.failOnKey {
+		return fmt.Errorf("simulated upload failure for %s", path)
 	}
-	return f.uploadErr
+	if f.uploaded == nil {
+		f.uploaded = map[string]bool{}
+	}
+	f.uploaded[path] = true
+	return nil
 }
 func (f *fakeStore) DownloadStream(_ context.Context, _ string, _ io.Writer) error { return nil }
-func (f *fakeStore) Head(_ context.Context, path string) (*storage.ObjectInfo, error) {
-	if f.objects != nil {
-		if sz, ok := f.objects[path]; ok {
-			return &storage.ObjectInfo{Size: sz}, nil
-		}
-		return nil, fmt.Errorf("head %q: %w", path, storage.ErrNotFound)
-	}
-	if f.headErr != nil {
-		return nil, f.headErr
-	}
-	return &storage.ObjectInfo{Size: f.headSize}, nil
-}
 
-func TestVerifyUploadedObject(t *testing.T) {
-	const streamed = int64(100)
+func TestFinalizeUpload(t *testing.T) {
+	const key = "prefix-audit_archive_20260701t030500z_abc12345.dump.age"
 	cases := []struct {
 		name        string
-		headSize    int64
-		headErr     error
-		uploadErr   error
+		failOnKey   string
 		wantErr     bool
 		wantSidecar bool
 	}{
-		{"exists + size match -> sidecar written, ok", 100, nil, nil, false, true},
-		{"head error -> error, no sidecar", 0, errors.New("no head"), nil, true, false},
-		{"size mismatch -> error, no sidecar", 99, nil, nil, true, false},
-		{"sidecar write fails -> error", 100, nil, errors.New("up fail"), true, false},
+		{name: "writes the sidecar", wantSidecar: true},
+		{
+			// The sidecar is the durable record that this archive was backed up. If it
+			// cannot be written the caller must NOT go on to drop the source table.
+			name:      "sidecar write failure is an error, so the drop never happens",
+			failOnKey: key + ".sha256",
+			wantErr:   true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fs := &fakeStore{headSize: tc.headSize, headErr: tc.headErr, uploadErr: tc.uploadErr}
-			b := &pgArchiveBackend{store: fs, cfg: &config.AppConfig{PGSchema: "rearm", DumpPrefix: "p"}}
-			err := b.verifyUploadedObject(context.Background(), "p-arch.dump", streamed, "deadbeef")
+			fs := &fakeStore{failOnKey: tc.failOnKey}
+			b := &pgArchiveBackend{store: fs, cfg: &config.AppConfig{}}
+			err := b.finalizeUpload(context.Background(), key, 100, "abc123")
 			if (err != nil) != tc.wantErr {
-				t.Errorf("err = %v, wantErr = %v", err, tc.wantErr)
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
-			if fs.uploaded["p-arch.dump.sha256"] != tc.wantSidecar {
-				t.Errorf("sidecar written = %v, want %v", fs.uploaded["p-arch.dump.sha256"], tc.wantSidecar)
+			if got := fs.uploaded[key+".sha256"]; got != tc.wantSidecar {
+				t.Errorf("sidecar written = %v, want %v", got, tc.wantSidecar)
 			}
 		})
 	}
+}
+
+// The whole design rests on the steady-state credential being write-only, so assert on the
+// CALLS rather than the outcome: a reintroduced read would otherwise be invisible to tests
+// that only check results, and would surface as a broadened IAM policy in production.
+func TestBackupAndDropIsWriteOnly(t *testing.T) {
+	rs := &readRejectingStore{}
+	rec := &recordingExec{}
+	b := &pgArchiveBackend{store: rs, cfg: &config.AppConfig{PGSchema: "rearm"}, exec: rec}
+	b.backupArchive = func(context.Context, string, *stats.Tracker) error { return nil }
+
+	if err := b.backupAndDrop(context.Background(), "audit_archive_20260701t030500z_abc12345", stats.New()); err != nil {
+		t.Fatalf("backupAndDrop: %v", err)
+	}
+	if rs.downloads > 0 {
+		t.Errorf("the drop path issued %d bucket read(s); it must be write-only (--verify-restore is the only exception)", rs.downloads)
+	}
+}
+
+// readRejectingStore fails loudly on any read, so a reintroduced bucket lookup shows up as
+// a test failure rather than as a silently broadened credential requirement.
+type readRejectingStore struct{ downloads int }
+
+func (r *readRejectingStore) UploadStream(_ context.Context, _ string, rd io.Reader) error {
+	_, _ = io.Copy(io.Discard, rd)
+	return nil
+}
+func (r *readRejectingStore) DownloadStream(_ context.Context, path string, _ io.Writer) error {
+	r.downloads++
+	return fmt.Errorf("unexpected read of %q: the steady-state path must be write-only", path)
 }
 
 func TestRotateSQL(t *testing.T) {
@@ -340,78 +355,80 @@ func TestAgedOut(t *testing.T) {
 	}
 }
 
-// --- the pre-drop gate: the decision guarding the sole irreversible step ---
+// recordingExec captures DDL instead of running it, so the sole irreversible step can be
+// asserted on without a live Postgres.
+type recordingExec struct{ stmts []string }
 
-func TestBackupIsDroppable_CheapGate(t *testing.T) {
-	const archive = "audit_archive_20260720t100100z_dead"
-	// cfg without encryption -> suffix ".dump"
-	cfg := &config.AppConfig{PGSchema: "rearm", DumpPrefix: "p"}
-	dumpKey := "p-" + archive + ".dump"
-	sidecarKey := dumpKey + ".sha256"
+func (r *recordingExec) Exec(_ context.Context, sql string) error {
+	r.stmts = append(r.stmts, sql)
+	return nil
+}
 
+// THE test for this package: a DROP must be unreachable unless that archive's own backup
+// succeeded. Nothing re-reads the bucket afterwards, so this ordering is the only thing
+// between a failed upload and irreversible data loss.
+func TestBackupAndDropNeverDropsWhenBackupFails(t *testing.T) {
+	const archive = "audit_archive_20260701t030500z_abc12345"
 	cases := []struct {
-		name    string
-		objects map[string]int64
-		wantErr bool
+		name      string
+		backupErr error
+		wantDrops int
 	}{
-		{"dump + sidecar present -> droppable", map[string]int64{dumpKey: 100, sidecarKey: 65}, false},
-		{"dump present, sidecar absent -> NOT droppable", map[string]int64{dumpKey: 100}, true},
-		{"dump absent -> NOT droppable", map[string]int64{sidecarKey: 65}, true},
-		{"nothing present -> NOT droppable", map[string]int64{}, true},
+		{"dump/upload failed -> no DROP", errors.New("upload did not complete"), 0},
+		{"sidecar write failed -> no DROP", errors.New("writing sha256 sidecar"), 0},
+		{"verify-restore failed -> no DROP", errors.New("pg_restore -l rejected the archive"), 0},
+		{"backup succeeded -> exactly one DROP", nil, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := &pgArchiveBackend{store: &fakeStore{objects: tc.objects}, cfg: cfg}
-			err := b.backupIsDroppable(context.Background(), archive, false)
-			if (err != nil) != tc.wantErr {
-				t.Errorf("err = %v, wantErr = %v", err, tc.wantErr)
+			rec := &recordingExec{}
+			b := &pgArchiveBackend{
+				store: &fakeStore{},
+				cfg:   &config.AppConfig{PGSchema: "rearm", LockTimeout: "5s"},
+				exec:  rec,
+			}
+			b.backupArchive = func(context.Context, string, *stats.Tracker) error { return tc.backupErr }
+
+			err := b.backupAndDrop(context.Background(), archive, stats.New())
+			if (err != nil) != (tc.backupErr != nil) {
+				t.Fatalf("err = %v, want error: %v", err, tc.backupErr != nil)
+			}
+			drops := 0
+			for _, st := range rec.stmts {
+				if strings.Contains(st, "DROP TABLE") {
+					drops++
+					if want := "rearm." + archive; !strings.Contains(st, want) {
+						t.Errorf("DROP targeted the wrong table, want %q in %q", want, st)
+					}
+				}
+			}
+			if drops != tc.wantDrops {
+				t.Errorf("DROP statements executed = %d, want %d (stmts: %v)", drops, tc.wantDrops, rec.stmts)
 			}
 		})
 	}
 }
 
-// A transient (non-NotFound) Head error must NOT be read as "safe to drop".
-func TestBackupIsDroppable_TransientHeadErrorDoesNotDrop(t *testing.T) {
-	cfg := &config.AppConfig{PGSchema: "rearm", DumpPrefix: "p"}
-	b := &pgArchiveBackend{store: &fakeStore{headErr: errors.New("throttled")}, cfg: cfg}
-	if err := b.backupIsDroppable(context.Background(), "audit_archive_20260720t100100z_dead", false); err == nil {
-		t.Error("transient Head error must fail the gate (not droppable), got nil")
+// An unwired seam must fail closed rather than nil-panic: pgArchiveBackend embeds
+// *pg.Client, which promotes Exec, so a future caller could otherwise construct a partly
+// wired backend and reach the DROP by a path that bypasses the injected executor.
+func TestBackupAndDropRefusesWhenUnwired(t *testing.T) {
+	cases := []struct {
+		name string
+		b    *pgArchiveBackend
+	}{
+		{"no executor", &pgArchiveBackend{store: &fakeStore{}, cfg: &config.AppConfig{}, backupArchive: func(context.Context, string, *stats.Tracker) error { return nil }}},
+		{"no backup step", &pgArchiveBackend{store: &fakeStore{}, cfg: &config.AppConfig{}, exec: &recordingExec{}}},
 	}
-}
-
-// hasBackup keys on the sidecar (written last) and must map a definitive ErrNotFound
-// to "not backed up" while propagating a transient error.
-func TestHasBackup(t *testing.T) {
-	const archive = "audit_archive_20260720t100100z_dead"
-	cfg := &config.AppConfig{PGSchema: "rearm", DumpPrefix: "p"}
-	dumpKey := "p-" + archive + ".dump"
-	sidecarKey := dumpKey + ".sha256"
-
-	t.Run("dump + sidecar present -> backed up", func(t *testing.T) {
-		b := &pgArchiveBackend{store: &fakeStore{objects: map[string]int64{dumpKey: 100, sidecarKey: 65}}, cfg: cfg}
-		ok, err := b.hasBackup(context.Background(), archive)
-		if err != nil || !ok {
-			t.Errorf("ok=%v err=%v, want true,nil", ok, err)
-		}
-	})
-	t.Run("sidecar present but dump missing -> not backed up (self-heal re-dump)", func(t *testing.T) {
-		b := &pgArchiveBackend{store: &fakeStore{objects: map[string]int64{sidecarKey: 65}}, cfg: cfg}
-		ok, err := b.hasBackup(context.Background(), archive)
-		if err != nil || ok {
-			t.Errorf("ok=%v err=%v, want false,nil", ok, err)
-		}
-	})
-	t.Run("both absent -> not backed up, no error", func(t *testing.T) {
-		b := &pgArchiveBackend{store: &fakeStore{objects: map[string]int64{}}, cfg: cfg}
-		ok, err := b.hasBackup(context.Background(), archive)
-		if err != nil || ok {
-			t.Errorf("ok=%v err=%v, want false,nil", ok, err)
-		}
-	})
-	t.Run("transient error -> propagated, not treated as absence", func(t *testing.T) {
-		b := &pgArchiveBackend{store: &fakeStore{headErr: errors.New("throttled")}, cfg: cfg}
-		if _, err := b.hasBackup(context.Background(), archive); err == nil {
-			t.Error("transient Head error must propagate, got nil")
-		}
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.b.backupAndDrop(context.Background(), "audit_archive_20260701t030500z_abc12345", stats.New())
+			if err == nil {
+				t.Fatal("expected a refusal, got nil -- an unwired backend must never reach the DROP")
+			}
+			if !strings.Contains(err.Error(), "refusing to drop") {
+				t.Errorf("error should name the refusal, got %v", err)
+			}
+		})
+	}
 }

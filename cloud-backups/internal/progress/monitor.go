@@ -39,7 +39,7 @@ func (m *Monitor) SetEvent(progressEvent, stallEvent string) *Monitor {
 	return m
 }
 
-// SetPrecise marks total as an EXACT byte count (e.g. a HeadObject size for a
+// SetPrecise marks total as an EXACT byte count (e.g. a known object size for a
 // re-download) rather than an estimate. Progress lines then report "percent"/"eta"
 // (not "_approx") and percent is not capped below 100. Must be called BEFORE Start().
 // Returns m for chaining.
