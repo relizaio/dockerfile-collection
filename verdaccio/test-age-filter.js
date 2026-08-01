@@ -96,7 +96,7 @@ async function testPackage(packageName) {
         if (verdaccioStats.recent === 0 && npmjsStats.recent > 0) {
             console.log(`✅ SUCCESS: Age filter is working! ${npmjsStats.recent} recent versions were filtered out.`);
         } else if (npmjsStats.recent === 0) {
-            console.log(`ℹ️  INFO: No recent versions found in this package to filter.`);
+            console.log(`ℹ  INFO: No recent versions found in this package to filter.`);
         } else {
             console.log(`❌ WARNING: Age filter may not be working. Recent versions still present.`);
         }
