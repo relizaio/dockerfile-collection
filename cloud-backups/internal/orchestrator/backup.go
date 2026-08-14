@@ -38,7 +38,7 @@ type BackupManager struct {
 	EncPassword       string // used only to build the modifier chain
 	DumpPrefix        string
 	Timeout           time.Duration
-	DeterministicName bool // when true, use last path segment as filename (no timestamp/random) — overwrites on re-run
+	DeterministicName bool // when true, use last path segment as filename (no timestamp/random) - overwrites on re-run
 }
 
 // RunBackups resolves the final target list and fans out concurrent backup workers.
@@ -96,7 +96,7 @@ func (m *BackupManager) resolveTargets(basePaths []string, rollingMonths bool) [
 	slog.Info("rolling_months_strategy_enabled", "base_paths", basePaths)
 	now := time.Now().UTC()
 	currentMonth := now.Format("2006-01")
-	previousMonth := now.AddDate(0, 0, -now.Day()).Format("2006-01")
+	previousMonth := PreviousMonthSuffix(now)
 
 	var targets []string
 	for _, p := range basePaths {
@@ -104,4 +104,22 @@ func (m *BackupManager) resolveTargets(basePaths []string, rollingMonths bool) [
 		targets = append(targets, fmt.Sprintf("%s-%s", p, previousMonth))
 	}
 	return targets
+}
+
+// PreviousMonthSuffix is the YYYY-MM appended to build the previous-month
+// target. Exported because that target is the ONLY one under rolling months
+// whose absence is legitimate (it may predate the deployment, or the month may
+// have had no artifacts); callers deciding whether a skip is expected need to
+// identify it, and must not re-derive the date arithmetic independently.
+func PreviousMonthSuffix(now time.Time) string {
+	return now.AddDate(0, 0, -now.Day()).Format("2006-01")
+}
+
+// SkipIsExpected reports whether a skipped (absent) target is a legitimate
+// absence rather than a missing backup. Under explicit paths every target was
+// named by an operator, so no absence is expected. Under rolling months only
+// the previous-month target may legitimately not exist -- the CURRENT month is
+// the one being actively written, and its absence means a real gap.
+func SkipIsExpected(target string, rollingMonths bool, now time.Time) bool {
+	return rollingMonths && strings.HasSuffix(target, "-"+PreviousMonthSuffix(now))
 }

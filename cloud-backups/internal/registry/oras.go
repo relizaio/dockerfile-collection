@@ -82,7 +82,7 @@ func (c *OrasClient) Backup(ctx context.Context, registryPath string, out io.Wri
 		if strings.Contains(logs, "unauthorized") || strings.Contains(logs, "authentication required") {
 			return fmt.Errorf("unauthorized to access %s: check token scopes", fullPath)
 		}
-		if strings.Contains(logs, "not found") || strings.Contains(logs, "404") {
+		if repositoryAbsent(logs) {
 			slog.Warn("oras_backup_repository_not_found", "path", fullPath)
 			return fmt.Errorf("repository name not known to registry: %s", fullPath)
 		}
@@ -143,24 +143,68 @@ func (c *OrasClient) PreflightCheck(ctx context.Context, registryPath string) er
 	cmd := exec.CommandContext(ctx, "oras", preflightArgs...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_CONFIG=%s", c.authDir))
 
-	// tailBuffer, matching Backup and Restore above. An unbounded builder lets a
-	// chatty failure produce an arbitrarily large error string, and unlike its
-	// siblings this one is surfaced at ERROR straight into an alert payload.
-	stderrBuf := &tailBuffer{max: 8192}
-	cmd.Stderr = stderrBuf
+	// Deliberately NOT a tailBuffer: `logs` is what the not-found and auth
+	// predicates below match on, so dropping the head can change the
+	// CLASSIFICATION, not just the message -- a probe whose "not found" token
+	// scrolls out of a bounded buffer stops being a tolerated absence and aborts
+	// the entire run. The size of the surfaced string is bounded at the call
+	// site instead, where it is only used for display.
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Run(); err != nil {
 		logs := stderrBuf.String()
 		if strings.Contains(logs, "unauthorized") || strings.Contains(logs, "authentication required") {
 			return fmt.Errorf("unauthorized to access %s: check token scopes", fullPath)
 		}
-		if strings.Contains(logs, "not found") || strings.Contains(logs, "404") {
+		if repositoryAbsent(logs) {
 			slog.Warn("oras_preflight_repository_not_found", "path", fullPath)
 			return nil
 		}
 		return fmt.Errorf("preflight check failed for %s: %w | Logs: %s", fullPath, err, strings.TrimSpace(logs))
 	}
 	return nil
+}
+
+// transportFailureMarkers are substrings that only a connectivity failure
+// produces. A repository that is genuinely absent never emits them.
+var transportFailureMarkers = []string{
+	"connection refused",
+	"connection reset",
+	"dial tcp",
+	"i/o timeout",
+	"no such host",
+	"tls handshake",
+	"unexpected eof",
+	"context deadline exceeded",
+}
+
+// repositoryAbsent reports whether the tool's output means "this repository
+// does not exist" rather than "we could not reach the registry".
+//
+// The distinction decides whether the caller SKIPS the target (no backup, no
+// alert, exit 0) or FAILS it, so a false positive silently loses a backup. Two
+// traps, both observed:
+//
+//   - Bare "404" is not evidence. Content digests are hex, and "404" appears in
+//     roughly 1.5% of them, so a refused dial on a repo with enough blobs in the
+//     log tail gets misread as an absence. Any transport marker therefore vetoes
+//     the classification outright.
+//   - Matching was case-sensitive and missed the canonical distribution error
+//     ("name unknown: repository name not known to registry") entirely, which
+//     made preflight abort whole runs against distribution-compatible
+//     registries. Match case-insensitively and include the canonical phrasing.
+func repositoryAbsent(logs string) bool {
+	l := strings.ToLower(logs)
+	for _, marker := range transportFailureMarkers {
+		if strings.Contains(l, marker) {
+			return false
+		}
+	}
+	return strings.Contains(l, "name unknown") ||
+		strings.Contains(l, "repository name not known") ||
+		strings.Contains(l, "not found") ||
+		strings.Contains(l, "404")
 }
 
 func makeRandBytes() ([]byte, error) {

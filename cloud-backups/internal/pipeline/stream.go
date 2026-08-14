@@ -81,6 +81,16 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 		}
 
 		if strings.Contains(err.Error(), "repository name not known to registry") {
+			// An absent repository is a legitimate skip, but only if it is the
+			// FIRST thing we saw. Reaching here after an attempt already failed
+			// for another reason means the classification is suspect (it is a
+			// substring match on a log tail), and swallowing it would retire the
+			// target with no ERROR at all. Surface those earlier causes.
+			if len(attemptErrs) > 0 {
+				slog.Error("repository_not_found_after_failed_attempts", "target", target,
+					"detail", "classified as absent only after earlier attempts failed; treat the absence as unconfirmed",
+					"error", strings.Join(attemptErrs, " | "))
+			}
 			slog.Warn("repository_not_found_skipping", "target", target)
 			jobHandled = true
 			tracker.RecordSkipped(target)
@@ -96,6 +106,13 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 		slog.Warn("backup_attempt_failed", "target", target, "attempt", attempt, "error", err.Error())
 		if attempt < MaxBackupAttempts {
 			if !waitBackoff(ctx, attempt) {
+				// Abandoned mid-retry. PrintSummary will report the target as
+				// failed, but only the causes we collected explain WHY, and they
+				// are otherwise WARN-only -- invisible where alerting is
+				// ERROR-only. Emit them before giving up.
+				slog.Error("backup_abandoned", "target", target, "attempts_used", len(attemptErrs),
+					"detail", "run cancelled before the retries were exhausted",
+					"error", strings.Join(attemptErrs, " | "))
 				return
 			}
 		}
@@ -119,11 +136,16 @@ func isAuthRejection(err error) bool {
 }
 
 // TruncateCause bounds one attempt's cause before it goes into an aggregated
-// log field. A cause carries the tail of the backup tool's own output (up to
-// MaxCauseLength * several, e.g. the 8KB oras tail), and backup_exhausted joins
-// one per attempt -- unbounded, that is a single ~24KB field, which alerting
-// backends truncate at an arbitrary point or reject outright. Keeping the head
-// preserves the part that names the failure.
+// log field. A cause carries the tail of the backup tool's own output (an 8KB
+// tailBuffer), and backup_exhausted joins one per attempt -- unbounded, that is
+// a single ~24KB field, which alerting backends truncate at an arbitrary point
+// or reject outright.
+//
+// Keep the TAIL, not the head. The upstream buffer is already a tail buffer
+// precisely because these tools print their diagnostic last, after progress
+// chatter: `oras` ends with "Error: failed to ...". Head-truncating a tail
+// buffer throws away the only line that names the fault and keeps the progress
+// noise, so the surviving ERROR says nothing.
 func TruncateCause(cause string) string {
 	if len(cause) <= MaxCauseLength {
 		return cause
@@ -131,8 +153,8 @@ func TruncateCause(cause string) string {
 	// ToValidUTF8 because the cut can land mid-rune, and an invalid byte becomes
 	// U+FFFD once the record is JSON-encoded -- corruption that reads like a bug
 	// in the failure itself.
-	head := strings.ToValidUTF8(cause[:MaxCauseLength], "")
-	return head + fmt.Sprintf("... (truncated, %d bytes total)", len(cause))
+	tail := strings.ToValidUTF8(cause[len(cause)-MaxCauseLength:], "")
+	return fmt.Sprintf("(truncated, %d bytes total, showing last %d) ...", len(cause), MaxCauseLength) + tail
 }
 
 // waitBackoff sleeps the exponential backoff for the just-failed attempt.

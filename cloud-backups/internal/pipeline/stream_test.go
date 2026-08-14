@@ -622,11 +622,24 @@ func TestTruncateCause_BoundsAggregatedField(t *testing.T) {
 	if len(got) >= len(long) {
 		t.Fatalf("a long cause must shrink: got %d bytes, original %d", len(got), len(long))
 	}
-	if !strings.HasPrefix(got, strings.Repeat("x", MaxCauseLength)) {
-		t.Error("truncation must keep the head, which names the failure")
-	}
 	if !strings.Contains(got, "truncated") {
 		t.Error("a truncated cause must say so, or it reads as the whole error")
+	}
+
+	// The property that matters. Upstream is a tailBuffer holding the LAST 8KB
+	// of the tool's output, and these tools print their diagnostic last, after
+	// progress chatter. Head-truncating a tail buffer keeps the noise and throws
+	// away the only line that names the fault, so the surviving ERROR says
+	// nothing -- which is exactly the bug this shape exists to prevent.
+	diagnostic := `Error: failed to find tags: dial tcp 10.0.5.5:443: connect: connection refused`
+	orasShaped := strings.Repeat("Uploading 1a2b3c4d sha256:deadbeef 100.00%\n", 400) + diagnostic
+	if len(orasShaped) <= MaxCauseLength {
+		t.Fatalf("fixture must exceed the cap to exercise truncation, got %d bytes", len(orasShaped))
+	}
+	kept := TruncateCause(orasShaped)
+	if !strings.Contains(kept, diagnostic) {
+		t.Errorf("truncation dropped the diagnostic line, leaving only progress noise; got tail %q",
+			kept[max(0, len(kept)-120):])
 	}
 }
 
@@ -734,5 +747,79 @@ func TestLogRecords_NeverUseMsgAsAttrKey(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A "repository absent" classification is a substring match on a log tail, so it
+// can misfire on a transient failure (a content digest containing "404"). When
+// it lands AFTER an attempt already failed for another reason, the absence is
+// unconfirmed and swallowing it retires the target with no ERROR at all -- the
+// path that lets a real repo go unbacked-up at exit 0.
+func TestRunWithRetry_SkipAfterFailedAttemptsIsNotSilent(t *testing.T) {
+	recs := captureLogs(t)
+	var n atomic.Int32
+	src := &mockSource{backupFn: func(context.Context, string, io.Writer) error {
+		if n.Add(1) == 1 {
+			return errors.New("dial tcp 10.0.5.5:443: connect: connection refused")
+		}
+		return errors.New("repository name not known to registry")
+	}}
+	var captured bytes.Buffer
+
+	RunWithRetry(context.Background(), src, captureStorage(&captured), "target", "prefix", ".dump", nil,
+		stats.New(), 30*time.Second, false, 0)
+
+	rec, ok := findLog(recs, "repository_not_found_after_failed_attempts")
+	if !ok {
+		t.Fatal("a skip preceded by a failed attempt must surface the earlier cause at ERROR")
+	}
+	if rec.Level != slog.LevelError {
+		t.Errorf("level: got %v want ERROR", rec.Level)
+	}
+	if !strings.Contains(rec.Attrs["error"], "connection refused") {
+		t.Errorf("the earlier cause must be carried, got %q", rec.Attrs["error"])
+	}
+}
+
+// ...but a clean first-attempt absence stays a quiet skip, or the previous-month
+// rolling target would page every month.
+func TestRunWithRetry_CleanSkipStaysQuiet(t *testing.T) {
+	recs := captureLogs(t)
+	src := &mockSource{backupFn: func(context.Context, string, io.Writer) error {
+		return errors.New("repository name not known to registry")
+	}}
+	var captured bytes.Buffer
+
+	RunWithRetry(context.Background(), src, captureStorage(&captured), "target", "prefix", ".dump", nil,
+		stats.New(), 30*time.Second, false, 0)
+
+	if msgs := errorLevelMsgs(recs); len(msgs) != 0 {
+		t.Errorf("a first-attempt absence must not alert, got %v", msgs)
+	}
+}
+
+// Cancellation mid-retry leaves the target unfinished. PrintSummary will count it
+// as failed, but only the collected causes explain why, and they are WARN-only.
+func TestRunWithRetry_AbandonedMidRetryExplainsItself(t *testing.T) {
+	recs := captureLogs(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	src := &mockSource{backupFn: func(context.Context, string, io.Writer) error {
+		cancel() // cancel while the first backoff is pending
+		return errors.New("dial tcp 10.0.5.5:443: connect: connection refused")
+	}}
+	var captured bytes.Buffer
+
+	RunWithRetry(ctx, src, captureStorage(&captured), "target", "prefix", ".dump", nil,
+		stats.New(), 30*time.Second, false, 0)
+
+	rec, ok := findLog(recs, "backup_abandoned")
+	if !ok {
+		t.Fatal("abandoning mid-retry must emit an ERROR carrying the causes so far")
+	}
+	if rec.Level != slog.LevelError {
+		t.Errorf("level: got %v want ERROR", rec.Level)
+	}
+	if !strings.Contains(rec.Attrs["error"], "connection refused") {
+		t.Errorf("the cause must be carried, got %q", rec.Attrs["error"])
 	}
 }

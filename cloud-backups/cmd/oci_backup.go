@@ -130,18 +130,26 @@ func runBackup() error {
 	// 6. Report result
 	stats.PrintSummary("backup_pipeline_completed", tracker, cfg.StorageType, time.Since(pipelineStart))
 
-	// PrintSummary only escalates when EVERY target is missing, so a partial
-	// skip stays at INFO and the run still exits 0 -- 49 of 50 repos could
-	// vanish silently. Under explicit paths each target is one an operator named,
-	// so any skip is a missing backup and must be visible. Rolling months is
-	// exempt: it deliberately fabricates a previous-month path that legitimately
-	// may not exist yet, and alerting on that would recreate the noise this
-	// tool's retry levels were just fixed to avoid.
-	if !cfg.AppendRollingMonths {
-		if skipped := tracker.GetSkipped(); len(skipped) > 0 {
+	// PrintSummary only escalates when EVERY target is missing, so a partial skip
+	// otherwise stays at INFO and the run still exits 0 -- 49 of 50 repos could
+	// vanish silently. A skipped target produced no backup, so it is only
+	// tolerable when the absence is expected: under rolling months the
+	// PREVIOUS-month path may legitimately not exist. The CURRENT month is being
+	// actively written, and under explicit paths every target was named by an
+	// operator, so those absences are real gaps and must be visible.
+	// PrintSummary already covers the all-skipped case at ERROR; do not double-report.
+	if !allTargetsSkipped(tracker) {
+		var unexpected []string
+		for _, s := range tracker.GetSkipped() {
+			if !orchestrator.SkipIsExpected(s, cfg.AppendRollingMonths, time.Now().UTC()) {
+				unexpected = append(unexpected, s)
+			}
+		}
+		if len(unexpected) > 0 {
 			slog.Error("backup_targets_missing_from_registry",
-				"error", fmt.Sprintf("%d of %d explicitly configured target(s) produced no backup because the repository was not found: %s",
-					len(skipped), tracker.GetTotal(), strings.Join(skipped, ", ")))
+				"detail", "a skipped target produced no backup; absence is only expected for the previous-month rolling target",
+				"error", fmt.Sprintf("%d of %d target(s) produced no backup because the repository was reported absent: %s",
+					len(unexpected), tracker.GetTotal(), strings.Join(unexpected, ", ")))
 		}
 	}
 
@@ -149,6 +157,12 @@ func runBackup() error {
 		return fmt.Errorf("backup pipeline completed with failures")
 	}
 	return nil
+}
+
+// allTargetsSkipped mirrors the condition PrintSummary uses to raise
+// pipeline_failed_all_repos_missing, so the two do not both alert on it.
+func allTargetsSkipped(t *stats.Tracker) bool {
+	return t.GetTotal() > 0 && t.GetSkippedCount() == t.GetTotal()
 }
 
 func init() {

@@ -152,3 +152,56 @@ func TestFormatBytes(t *testing.T) {
 		})
 	}
 }
+
+// The joined path list is the only part of the alert that says WHICH target is
+// broken, and it is built from a slice capped at MaxPathsTracked while the count
+// is uncapped. A silently short list reads as complete.
+func TestFormatPaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		paths []string
+		count int64
+		want  string
+	}{
+		{"nothing recorded", nil, 0, "(none recorded)"},
+		{"single", []string{"repo/a"}, 1, "repo/a"},
+		{
+			// pg audit-rotate records the database name once per archive, so an
+			// undeduped join reads "rearm, rearm, rearm".
+			name:  "repeated target is deduped",
+			paths: []string{"rearm", "rearm", "rearm"},
+			count: 3,
+			want:  "rearm",
+		},
+		{
+			name:  "truncated list says so",
+			paths: []string{"repo/a", "repo/b"},
+			count: 150,
+			want:  "repo/a, repo/b (showing 2 of 150 recorded)",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatPaths(tc.paths, tc.count); got != tc.want {
+				t.Errorf("formatPaths(%v, %d):\n got %q\nwant %q", tc.paths, tc.count, got, tc.want)
+			}
+		})
+	}
+}
+
+// GetSkipped must return a copy: callers iterate it while deciding whether to
+// alert, and handing out the live slice would race the workers still running.
+func TestGetSkipped_ReturnsCopy(t *testing.T) {
+	tr := New()
+	tr.RecordSkipped("repo/a")
+
+	got := tr.GetSkipped()
+	if len(got) != 1 || got[0] != "repo/a" {
+		t.Fatalf("unexpected skipped list: %v", got)
+	}
+	got[0] = "mutated"
+	if again := tr.GetSkipped(); again[0] != "repo/a" {
+		t.Errorf("mutating the returned slice corrupted the tracker: %v", again)
+	}
+}
