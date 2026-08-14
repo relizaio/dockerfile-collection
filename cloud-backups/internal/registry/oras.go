@@ -143,8 +143,11 @@ func (c *OrasClient) PreflightCheck(ctx context.Context, registryPath string) er
 	cmd := exec.CommandContext(ctx, "oras", preflightArgs...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_CONFIG=%s", c.authDir))
 
-	var stderrBuf strings.Builder
-	cmd.Stderr = &stderrBuf
+	// tailBuffer, matching Backup and Restore above. An unbounded builder lets a
+	// chatty failure produce an arbitrarily large error string, and unlike its
+	// siblings this one is surfaced at ERROR straight into an alert payload.
+	stderrBuf := &tailBuffer{max: 8192}
+	cmd.Stderr = stderrBuf
 
 	if err := cmd.Run(); err != nil {
 		logs := stderrBuf.String()

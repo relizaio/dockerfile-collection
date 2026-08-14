@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/relizaio/cloud-backup/internal/config"
 	"github.com/relizaio/cloud-backup/internal/oras"
 	"github.com/relizaio/cloud-backup/internal/orchestrator"
+	"github.com/relizaio/cloud-backup/internal/pipeline"
 	"github.com/relizaio/cloud-backup/internal/registry"
 	"github.com/relizaio/cloud-backup/internal/stats"
 	"github.com/relizaio/cloud-backup/internal/storage"
@@ -87,7 +89,7 @@ func runBackup() error {
 		slog.Error("registry_login_failed", "error", err.Error())
 		return err
 	}
-	defer authCtx.Cleanup() // guaranteed to run — no os.Exit below this point
+	defer authCtx.Cleanup() // guaranteed to run - no os.Exit below this point
 
 	regClient := registry.New(cfg.RegistryHost, authCtx.ConfigDir, cfg.PlainHTTP)
 
@@ -101,8 +103,8 @@ func runBackup() error {
 	basePaths := cfg.CleanBasePaths()
 	if len(basePaths) > 0 {
 		slog.Info("running_preflight_auth_check", "target", basePaths[0])
-		if err := regClient.PreflightCheck(ctx, basePaths[0]); err != nil {
-			slog.Error("preflight_check_failed", "error", err.Error())
+		if err := pipeline.RunPreflightWithRetry(ctx, regClient, basePaths[0]); err != nil {
+			slog.Error("preflight_check_failed", "target", basePaths[0], "error", pipeline.TruncateCause(err.Error()))
 			return err
 		}
 		slog.Info("preflight_check_passed")
@@ -127,6 +129,22 @@ func runBackup() error {
 
 	// 6. Report result
 	stats.PrintSummary("backup_pipeline_completed", tracker, cfg.StorageType, time.Since(pipelineStart))
+
+	// PrintSummary only escalates when EVERY target is missing, so a partial
+	// skip stays at INFO and the run still exits 0 -- 49 of 50 repos could
+	// vanish silently. Under explicit paths each target is one an operator named,
+	// so any skip is a missing backup and must be visible. Rolling months is
+	// exempt: it deliberately fabricates a previous-month path that legitimately
+	// may not exist yet, and alerting on that would recreate the noise this
+	// tool's retry levels were just fixed to avoid.
+	if !cfg.AppendRollingMonths {
+		if skipped := tracker.GetSkipped(); len(skipped) > 0 {
+			slog.Error("backup_targets_missing_from_registry",
+				"error", fmt.Sprintf("%d of %d explicitly configured target(s) produced no backup because the repository was not found: %s",
+					len(skipped), tracker.GetTotal(), strings.Join(skipped, ", ")))
+		}
+	}
+
 	if tracker.GetFailedCount() > 0 || (tracker.GetTotal() > 0 && tracker.GetTotal() == tracker.GetSkippedCount()) {
 		return fmt.Errorf("backup pipeline completed with failures")
 	}
