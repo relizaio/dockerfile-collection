@@ -72,7 +72,7 @@ func TestPGSuffixContract(t *testing.T) {
 		t.Errorf("OCI suffix must not contain .dump: %q", ociSuffix)
 	}
 
-	// PG suffix is .dump (or .dump.age) — no gzip layer at all.
+	// PG suffix is .dump (or .dump.age) - no gzip layer at all.
 	pgSuffixPlain := ".dump"
 	pgSuffixEnc := ".dump.age"
 	for _, s := range []string{pgSuffixPlain, pgSuffixEnc} {
@@ -137,7 +137,7 @@ func TestResolveTargets_RollingProducesCurrentAndPreviousMonth(t *testing.T) {
 		t.Fatalf("got %d paths, want 2", len(got))
 	}
 	// Both should be distinct (different months, unless we're on the 1st of the month
-	// and it wraps — but even then the function produces two entries)
+	// and it wraps - but even then the function produces two entries)
 	if got[0] == got[1] {
 		// This can happen on the 1st of the month when prev == current month boundary edge case
 		// Just verify both are present and have month suffix
@@ -235,4 +235,55 @@ func TestRunBackups_ContextCancelled(t *testing.T) {
 	// With cancelled context, jobs may be recorded as failures; no panic expected
 	total := tracker.GetTotal()
 	_ = total
+}
+
+// Under rolling months only the PREVIOUS-month target may legitimately be
+// absent. The current month is being actively written, so treating its absence
+// as expected would let a deleted or renamed repo pass as a healthy run -- the
+// exact silent-gap this predicate exists to close.
+func TestSkipIsExpected(t *testing.T) {
+	now := time.Date(2026, 8, 14, 3, 35, 0, 0, time.UTC)
+
+	tests := []struct {
+		name          string
+		target        string
+		rollingMonths bool
+		want          bool
+	}{
+		{"previous month under rolling months", "rearm-artifacts/rebom-artifacts-2026-07", true, true},
+		{"current month under rolling months", "rearm-artifacts/rebom-artifacts-2026-08", true, false},
+		{"unrelated month under rolling months", "rearm-artifacts/rebom-artifacts-2026-05", true, false},
+		{"previous month under explicit paths", "rearm-artifacts/rebom-artifacts-2026-07", false, false},
+		{"explicit path", "rearm-artifacts/rebom-artifacts", false, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SkipIsExpected(tc.target, tc.rollingMonths, now); got != tc.want {
+				t.Errorf("SkipIsExpected(%q, %v): got %v want %v", tc.target, tc.rollingMonths, got, tc.want)
+			}
+		})
+	}
+}
+
+// The suffix must match what resolveTargets actually builds, or the predicate
+// would exempt nothing and re-open the noise it is meant to avoid. January is
+// the case naive month arithmetic gets wrong.
+func TestPreviousMonthSuffix_CrossesYearBoundary(t *testing.T) {
+	if got := PreviousMonthSuffix(time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)); got != "2025-12" {
+		t.Errorf("January must roll back to the previous December, got %q", got)
+	}
+
+	m := &BackupManager{}
+	now := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	targets := m.resolveTargets([]string{"repo"}, true)
+	// resolveTargets uses time.Now(); assert the shape it produces agrees with
+	// the helper for the same instant rather than pinning a wall-clock date.
+	if len(targets) != 2 {
+		t.Fatalf("expected current+previous targets, got %v", targets)
+	}
+	if !strings.HasSuffix(targets[1], "-"+PreviousMonthSuffix(time.Now().UTC())) {
+		t.Errorf("second target %q must carry the previous-month suffix used by SkipIsExpected", targets[1])
+	}
+	_ = now
 }

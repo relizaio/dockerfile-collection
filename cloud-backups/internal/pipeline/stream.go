@@ -20,6 +20,10 @@ import (
 const (
 	MaxBackupAttempts = 3
 	DefaultTimeout    = 2 * time.Hour
+	// MaxCauseLength bounds a single attempt's cause inside an aggregated log
+	// field, so an alert payload stays ingestible. Generous enough to keep the
+	// failing URL and the tool's error line, which is what identifies the fault.
+	MaxCauseLength = 2000
 )
 
 var (
@@ -41,6 +45,8 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 		}
 	}()
 
+	var attemptErrs []string
+
 	for attempt := 1; attempt <= MaxBackupAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return
@@ -48,6 +54,13 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 		slog.Info("backup_started", "target", target, "attempt", attempt)
 		bytesUploaded, err := executeStream(ctx, src, storeProvider, target, backupName, nameSuffix, writerModifiers, timeout, deterministicName, totalHint)
 		if err == nil {
+			// A target that needed a retry recovered on its own, so it is not
+			// operator-actionable and must not alert. It is still worth a line,
+			// because a repeatedly flaky registry shows up here first.
+			if len(attemptErrs) > 0 {
+				slog.Warn("backup_recovered_after_retry", "target", target, "attempts_used", attempt,
+					"earlier_failures", strings.Join(attemptErrs, " | "))
+			}
 			slog.Info("backup_successful", "target", target, "duration", time.Since(startTimer).Round(time.Second).String(), "size_human", stats.FormatBytes(bytesUploaded))
 			jobHandled = true
 			tracker.RecordSuccess()
@@ -55,36 +68,142 @@ func RunWithRetry(ctx context.Context, src datasource.Source, storeProvider stor
 			return
 		}
 		// FAST-FAIL ON UNAUTHORIZED
-		if strings.Contains(err.Error(), "unauthorized") || strings.Contains(err.Error(), "authentication required") {
-			slog.Error("fatal_authentication_error", "target", target, "msg", "Credentials rejected. Halting retries.")
+		if isAuthRejection(err) {
+			// "detail", not "msg": slog's JSON handler already emits the event
+			// name as "msg", and a second "msg" attr is written verbatim, so
+			// every JSON parser in the alerting path keeps the LAST one and the
+			// event name never survives parsing.
+			slog.Error("fatal_authentication_error", "target", target, "detail", "Credentials rejected. Halting retries.",
+				"error", TruncateCause(err.Error()))
 			jobHandled = true
 			tracker.RecordFailure(target)
 			return // Exit immediately, do not wait for backoff
 		}
 
 		if strings.Contains(err.Error(), "repository name not known to registry") {
+			// An absent repository is a legitimate skip, but only if it is the
+			// FIRST thing we saw. Reaching here after an attempt already failed
+			// for another reason means the classification is suspect (it is a
+			// substring match on a log tail), and swallowing it would retire the
+			// target with no ERROR at all. Surface those earlier causes.
+			if len(attemptErrs) > 0 {
+				slog.Error("repository_not_found_after_failed_attempts", "target", target,
+					"detail", "classified as absent only after earlier attempts failed; treat the absence as unconfirmed",
+					"error", strings.Join(attemptErrs, " | "))
+			}
 			slog.Warn("repository_not_found_skipping", "target", target)
 			jobHandled = true
 			tracker.RecordSkipped(target)
 			return
 		}
 
-		slog.Error("backup_attempt_failed", "target", target, "attempt", attempt, "error", err.Error())
+		// WARN, not ERROR: this attempt may still be retried, and operator
+		// alerting fires on ERROR. A transient registry blip that the next
+		// attempt recovers from is not an incident, and paging on it trains
+		// operators to ignore the channel. The single ERROR for a target that
+		// really did fail is backup_exhausted below.
+		attemptErrs = append(attemptErrs, fmt.Sprintf("attempt %d: %s", attempt, TruncateCause(err.Error())))
+		slog.Warn("backup_attempt_failed", "target", target, "attempt", attempt, "error", err.Error())
 		if attempt < MaxBackupAttempts {
-			backoff := RetryBackoffBase * time.Duration(1<<uint(attempt))
-			if backoff > MaxBackoffDuration {
-				backoff = MaxBackoffDuration
-			}
-			timer := time.NewTimer(backoff)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
+			if !waitBackoff(ctx, attempt) {
+				// Abandoned mid-retry. PrintSummary will report the target as
+				// failed, but only the causes we collected explain WHY, and they
+				// are otherwise WARN-only -- invisible where alerting is
+				// ERROR-only. Emit them before giving up.
+				slog.Error("backup_abandoned", "target", target, "attempts_used", len(attemptErrs),
+					"detail", "run cancelled before the retries were exhausted",
+					"error", strings.Join(attemptErrs, " | "))
 				return
-			case <-timer.C:
 			}
 		}
 	}
-	slog.Error("backup_exhausted", "target", target)
+	// Carry every attempt's cause, because this is the only ERROR the operator
+	// sees for a failed target and an empty one is unactionable.
+	slog.Error("backup_exhausted", "target", target, "attempts_used", len(attemptErrs),
+		"error", strings.Join(attemptErrs, " | "))
+}
+
+// isAuthRejection reports whether the registry refused the credentials, in which
+// case retrying cannot help. Matching on error text is this module's established
+// idiom (see internal/registry/oras.go); the point of the helper is that the
+// backup and preflight drivers share ONE definition of the predicate.
+func isAuthRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "unauthorized") || strings.Contains(msg, "authentication required")
+}
+
+// TruncateCause bounds one attempt's cause before it goes into an aggregated
+// log field. A cause carries the tail of the backup tool's own output (an 8KB
+// tailBuffer), and backup_exhausted joins one per attempt -- unbounded, that is
+// a single ~24KB field, which alerting backends truncate at an arbitrary point
+// or reject outright.
+//
+// Keep the TAIL, not the head. The upstream buffer is already a tail buffer
+// precisely because these tools print their diagnostic last, after progress
+// chatter: `oras` ends with "Error: failed to ...". Head-truncating a tail
+// buffer throws away the only line that names the fault and keeps the progress
+// noise, so the surviving ERROR says nothing.
+func TruncateCause(cause string) string {
+	if len(cause) <= MaxCauseLength {
+		return cause
+	}
+	// ToValidUTF8 because the cut can land mid-rune, and an invalid byte becomes
+	// U+FFFD once the record is JSON-encoded -- corruption that reads like a bug
+	// in the failure itself.
+	tail := strings.ToValidUTF8(cause[len(cause)-MaxCauseLength:], "")
+	return fmt.Sprintf("(truncated, %d bytes total, showing last %d) ...", len(cause), MaxCauseLength) + tail
+}
+
+// waitBackoff sleeps the exponential backoff for the just-failed attempt.
+// It reports false when ctx was cancelled while waiting, meaning the caller
+// should give up rather than start another attempt.
+func waitBackoff(ctx context.Context, attempt int) bool {
+	backoff := RetryBackoffBase * time.Duration(1<<uint(attempt))
+	if backoff > MaxBackoffDuration {
+		backoff = MaxBackoffDuration
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// RunPreflightWithRetry probes the source with the same bounded retry/backoff a
+// backup attempt gets. Preflight gates the WHOLE run, so without this a single
+// transient network failure on one probe aborts every target with no retry at
+// all -- a strictly worse outcome than the per-target failure it exists to
+// prevent. Credential rejections still fail fast, since retrying cannot help.
+func RunPreflightWithRetry(ctx context.Context, src datasource.Source, target string) error {
+	var lastErr error
+	for attempt := 1; attempt <= MaxBackupAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		lastErr = src.PreflightCheck(ctx, target)
+		if lastErr == nil {
+			return nil
+		}
+		if isAuthRejection(lastErr) {
+			return lastErr
+		}
+		// Raw, not truncated: this is WARN and stays in the pod log, where the
+		// full detail is worth having. Truncation belongs on the ERROR that
+		// leaves the pod and lands in an alert payload.
+		slog.Warn("preflight_attempt_failed", "target", target, "attempt", attempt, "error", lastErr.Error())
+		if attempt < MaxBackupAttempts {
+			if !waitBackoff(ctx, attempt) {
+				return lastErr
+			}
+		}
+	}
+	return lastErr
 }
 
 func executeStream(parentCtx context.Context, src datasource.Source, storeProvider storage.Provider, target, backupName, nameSuffix string, writerModifiers []WriterModifier, timeout time.Duration, deterministicName bool, totalHint int64) (int64, error) {
@@ -179,7 +298,7 @@ func RunRestore(ctx context.Context, src datasource.Source, storeProvider storag
 	pipeR, pipeW := io.Pipe()
 	errChan := make(chan error, 1)
 
-	// 2. Goroutine: download → apply reader modifiers → write to pipeW
+	// 2. Goroutine: download -> apply reader modifiers -> write to pipeW
 	go func() {
 		var gErr error
 		defer func() {

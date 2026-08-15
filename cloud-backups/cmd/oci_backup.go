@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/relizaio/cloud-backup/internal/config"
 	"github.com/relizaio/cloud-backup/internal/oras"
 	"github.com/relizaio/cloud-backup/internal/orchestrator"
+	"github.com/relizaio/cloud-backup/internal/pipeline"
 	"github.com/relizaio/cloud-backup/internal/registry"
 	"github.com/relizaio/cloud-backup/internal/stats"
 	"github.com/relizaio/cloud-backup/internal/storage"
@@ -87,7 +89,7 @@ func runBackup() error {
 		slog.Error("registry_login_failed", "error", err.Error())
 		return err
 	}
-	defer authCtx.Cleanup() // guaranteed to run — no os.Exit below this point
+	defer authCtx.Cleanup() // guaranteed to run - no os.Exit below this point
 
 	regClient := registry.New(cfg.RegistryHost, authCtx.ConfigDir, cfg.PlainHTTP)
 
@@ -101,8 +103,8 @@ func runBackup() error {
 	basePaths := cfg.CleanBasePaths()
 	if len(basePaths) > 0 {
 		slog.Info("running_preflight_auth_check", "target", basePaths[0])
-		if err := regClient.PreflightCheck(ctx, basePaths[0]); err != nil {
-			slog.Error("preflight_check_failed", "error", err.Error())
+		if err := pipeline.RunPreflightWithRetry(ctx, regClient, basePaths[0]); err != nil {
+			slog.Error("preflight_check_failed", "target", basePaths[0], "error", pipeline.TruncateCause(err.Error()))
 			return err
 		}
 		slog.Info("preflight_check_passed")
@@ -127,10 +129,40 @@ func runBackup() error {
 
 	// 6. Report result
 	stats.PrintSummary("backup_pipeline_completed", tracker, cfg.StorageType, time.Since(pipelineStart))
+
+	// PrintSummary only escalates when EVERY target is missing, so a partial skip
+	// otherwise stays at INFO and the run still exits 0 -- 49 of 50 repos could
+	// vanish silently. A skipped target produced no backup, so it is only
+	// tolerable when the absence is expected: under rolling months the
+	// PREVIOUS-month path may legitimately not exist. The CURRENT month is being
+	// actively written, and under explicit paths every target was named by an
+	// operator, so those absences are real gaps and must be visible.
+	// PrintSummary already covers the all-skipped case at ERROR; do not double-report.
+	if !allTargetsSkipped(tracker) {
+		var unexpected []string
+		for _, s := range tracker.GetSkipped() {
+			if !orchestrator.SkipIsExpected(s, cfg.AppendRollingMonths, time.Now().UTC()) {
+				unexpected = append(unexpected, s)
+			}
+		}
+		if len(unexpected) > 0 {
+			slog.Error("backup_targets_missing_from_registry",
+				"detail", "a skipped target produced no backup; absence is only expected for the previous-month rolling target",
+				"error", fmt.Sprintf("%d of %d target(s) produced no backup because the repository was reported absent: %s",
+					len(unexpected), tracker.GetTotal(), strings.Join(unexpected, ", ")))
+		}
+	}
+
 	if tracker.GetFailedCount() > 0 || (tracker.GetTotal() > 0 && tracker.GetTotal() == tracker.GetSkippedCount()) {
 		return fmt.Errorf("backup pipeline completed with failures")
 	}
 	return nil
+}
+
+// allTargetsSkipped mirrors the condition PrintSummary uses to raise
+// pipeline_failed_all_repos_missing, so the two do not both alert on it.
+func allTargetsSkipped(t *stats.Tracker) bool {
+	return t.GetTotal() > 0 && t.GetSkippedCount() == t.GetTotal()
 }
 
 func init() {

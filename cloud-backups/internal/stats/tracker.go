@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,6 +33,14 @@ func (t *Tracker) GetTotal() int64        { t.mu.Lock(); defer t.mu.Unlock(); re
 func (t *Tracker) GetSuccess() int64      { t.mu.Lock(); defer t.mu.Unlock(); return t.Success }
 func (t *Tracker) GetFailedCount() int64  { t.mu.Lock(); defer t.mu.Unlock(); return t.FailureCount }
 func (t *Tracker) GetSkippedCount() int64 { t.mu.Lock(); defer t.mu.Unlock(); return t.SkippedCount }
+
+// GetSkipped returns the skipped paths. A skipped target produced no backup, so
+// callers that know a skip is illegitimate need the names, not just the count.
+func (t *Tracker) GetSkipped() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.Skipped)
+}
 
 func (t *Tracker) RecordSkipped(path string) {
 	t.mu.Lock()
@@ -64,6 +73,31 @@ func FormatBytes(bytes int64) string {
 	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
+// formatPaths renders a recorded path list for an alert payload. The list is
+// capped at MaxPathsTracked while the count is not, and callers that pass a
+// repeated target (pg audit-rotate records the database name once per archive)
+// would otherwise render "rearm, rearm, rearm". Dedupe, and say so when the
+// list is shorter than the count, so a truncated list cannot read as complete.
+func formatPaths(paths []string, count int64) string {
+	if len(paths) == 0 {
+		return "(none recorded)"
+	}
+	unique := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		unique = append(unique, p)
+	}
+	rendered := strings.Join(unique, ", ")
+	if int64(len(paths)) < count {
+		return fmt.Sprintf("%s (showing %d of %d recorded)", rendered, len(paths), count)
+	}
+	return rendered
+}
+
 func PrintSummary(eventName string, t *Tracker, storageType string, duration time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -88,10 +122,20 @@ func PrintSummary(eventName string, t *Tracker, storageType string, duration tim
 
 	allSkipped := t.Total > 0 && t.SkippedCount == t.Total
 
+	// The failing paths are already inside summary, but alerting reads flat
+	// fields -- a nested map renders as an opaque blob, so the one ERROR that
+	// says the run lost data would arrive without saying which target.
 	if allSkipped {
-		slog.Error("pipeline_failed_all_repos_missing", "summary", summary, "msg", "CRITICAL: No repositories found.")
+		// "detail", not "msg": slog's JSON handler emits the event name as
+		// "msg", so a "msg" attr becomes a duplicate key and every JSON parser
+		// keeps the last one -- the event name would never survive parsing.
+		slog.Error("pipeline_failed_all_repos_missing", "summary", summary, "detail", "CRITICAL: No repositories found.",
+			"error", fmt.Sprintf("no repositories found: all %d target(s) missing from the registry: %s",
+				t.Total, formatPaths(t.Skipped, t.SkippedCount)))
 	} else if t.FailureCount > 0 {
-		slog.Error("pipeline_completed_with_failures", "summary", summary)
+		slog.Error("pipeline_completed_with_failures", "summary", summary,
+			"error", fmt.Sprintf("%d of %d target(s) failed: %s",
+				t.FailureCount, t.Total, formatPaths(t.Failed, t.FailureCount)))
 	} else {
 		slog.Info("pipeline_completed_successfully", "summary", summary)
 	}

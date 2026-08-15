@@ -44,7 +44,7 @@ func TestTailBuffer_MultipleWritesTruncation(t *testing.T) {
 	if len(got) != 5 {
 		t.Errorf("expected 5 bytes, got %d: %q", len(got), got)
 	}
-	// After writing "12345" then "678", buf is "12345678" → truncated to last 5 = "45678"
+	// After writing "12345" then "678", buf is "12345678" -> truncated to last 5 = "45678"
 	if got != "45678" {
 		t.Errorf("got %q want %q", got, "45678")
 	}
@@ -118,5 +118,46 @@ func TestTailBuffer_MatchesBytesBuffer(t *testing.T) {
 
 	if tb.String() != bb.String() {
 		t.Errorf("tailBuffer %q != bytes.Buffer %q", tb.String(), bb.String())
+	}
+}
+
+// This predicate decides SKIP (no backup, no alert, exit 0) versus FAIL, so a
+// false positive silently loses a backup. Both directions are pinned.
+func TestRepositoryAbsent(t *testing.T) {
+	tests := []struct {
+		name string
+		logs string
+		want bool
+	}{
+		// Genuine absences must still skip, or the previous-month rolling
+		// target would fail every month.
+		{"canonical distribution error", `Error response from registry: name unknown: repository name not known to registry`, true},
+		{"wrapped repository message", "repository name not known to registry: reg/repo", true},
+		{"lowercase not found", "Error: repo not found", true},
+		{"capitalised status text", "Error: unexpected status 404 Not Found", true},
+
+		// A transport failure is NOT an absence. A content digest containing
+		// "404" must never turn a refused dial into a silent skip -- this is the
+		// case that produced a successful-looking run with no backup.
+		{
+			name: "refused dial with 404 inside a digest",
+			logs: `Uploading sha256:a481e31691d2b86354c9ebbe3db446dd4041b514 100.00%
+Error: failed to find tags: Get "https://reg/v2/org/repo/tags/list?last=x&n=100&orderby=": dial tcp 10.0.5.5:443: connect: connection refused`,
+			want: false,
+		},
+		{"connection reset with 404 digest", "sha256:404aa1 ... read: connection reset by peer", false},
+		{"i/o timeout with not found text", "Get \"https://reg/v2/\": i/o timeout, repo not found in cache", false},
+
+		// Neither absence nor transport failure.
+		{"generic server error", "Error: unexpected status code 500 Internal Server Error", false},
+		{"empty", "", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := repositoryAbsent(tc.logs); got != tc.want {
+				t.Errorf("repositoryAbsent: got %v want %v\nlogs: %s", got, tc.want, tc.logs)
+			}
+		})
 	}
 }
