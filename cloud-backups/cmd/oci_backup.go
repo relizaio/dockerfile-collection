@@ -130,26 +130,20 @@ func runBackup() error {
 	// 6. Report result
 	stats.PrintSummary("backup_pipeline_completed", tracker, cfg.StorageType, time.Since(pipelineStart))
 
-	// PrintSummary only escalates when EVERY target is missing, so a partial skip
-	// otherwise stays at INFO and the run still exits 0 -- 49 of 50 repos could
-	// vanish silently. A skipped target produced no backup, so it is only
-	// tolerable when the absence is expected: under rolling months the
-	// PREVIOUS-month path may legitimately not exist. The CURRENT month is being
-	// actively written, and under explicit paths every target was named by an
-	// operator, so those absences are real gaps and must be visible.
+	// PrintSummary only escalates when EVERY target is missing, so a partially
+	// uncovered run otherwise stays at INFO and exits 0. Alert per BASE PATH, not
+	// per target: under rolling months the month suffixes are fabricated from the
+	// calendar, and a month with no artifacts has no repository at all, which is
+	// normal. A base path that produced NOTHING is the unambiguous signal -- that
+	// is what a renamed, deleted or mistyped path looks like.
 	// PrintSummary already covers the all-skipped case at ERROR; do not double-report.
 	if !allTargetsSkipped(tracker) {
-		var unexpected []string
-		for _, s := range tracker.GetSkipped() {
-			if !orchestrator.SkipIsExpected(s, cfg.AppendRollingMonths, time.Now().UTC()) {
-				unexpected = append(unexpected, s)
-			}
-		}
-		if len(unexpected) > 0 {
-			slog.Error("backup_targets_missing_from_registry",
-				"detail", "a skipped target produced no backup; absence is only expected for the previous-month rolling target",
-				"error", fmt.Sprintf("%d of %d target(s) produced no backup because the repository was reported absent: %s",
-					len(unexpected), tracker.GetTotal(), strings.Join(unexpected, ", ")))
+		uncovered := orchestrator.UncoveredBasePaths(basePaths, cfg.AppendRollingMonths, time.Now().UTC(), tracker.GetSkipped())
+		if len(uncovered) > 0 {
+			slog.Error("backup_base_path_uncovered",
+				"detail", "every repository for this base path was reported absent, so the run produced no backup for it at all",
+				"error", fmt.Sprintf("%d of %d configured base path(s) produced no backup: %s",
+					len(uncovered), len(basePaths), strings.Join(uncovered, ", ")))
 		}
 	}
 
