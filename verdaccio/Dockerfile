@@ -23,11 +23,17 @@ COPY package.json /verdaccio/plugins/verdaccio-age-filter/
 COPY config.yaml /verdaccio/conf/config.yaml
 RUN chown verdaccio -R /verdaccio
 
-# Drop the bundled npm CLI. A registry server never invokes it -- verdaccio is
+# Drop the bundled npm CLI: a registry server never invokes it -- verdaccio is
 # a node script started by dumb-init, and neither the entrypoint nor the plugin
-# touches npm -- but it is by far the largest source of CVEs in the image
-# (tar, sigstore, brace-expansion, ip-address and picomatch findings all live
-# in npm's own vendored tree, not in verdaccio's). Node itself stays.
+# touches npm -- so nothing needs it and a compromised container cannot use it
+# to pull tooling. Node itself stays.
+#
+# Note what this does NOT do. npm arrives in a base-image layer we do not own,
+# so deleting it here only whites it out of the final filesystem; the bytes
+# still ship, and any scanner reading all layers (which is what our CI SBOM
+# does) still reports npm's vendored tree -- tar, sigstore, brace-expansion,
+# ip-address, picomatch. Removing those findings needs a runtime base that
+# never had npm, not a deletion on top of one that did.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 USER verdaccio
