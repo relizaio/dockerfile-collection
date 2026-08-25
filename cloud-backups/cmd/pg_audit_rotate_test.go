@@ -95,7 +95,7 @@ func (r *readRejectingStore) DownloadStream(_ context.Context, path string, _ io
 }
 
 func TestRotateSQL(t *testing.T) {
-	got := rotateSQL("rearm", "audit", "audit_archive_20260719t120000z_deadbeef", "5s", 1234567890, "audit_archive_20260601t120000z_old")
+	got := rotateSQL("rearm", "audit", "audit_archive_20260719t120000z_deadbeef", "5s", 1234567890, "audit_archive_20260601t120000z_old", 0, "revision_created_date")
 	for _, want := range []string{
 		"SET LOCAL lock_timeout = '5s';",
 		"ALTER TABLE rearm.audit RENAME TO audit_archive_20260719t120000z_deadbeef;",
@@ -115,6 +115,28 @@ func TestRotateSQL(t *testing.T) {
 	if strings.Index(got, "pg_try_advisory_xact_lock") > strings.Index(got, "ALTER TABLE rearm.audit RENAME") {
 		t.Errorf("advisory-lock guard must precede the RENAME in:\n%s", got)
 	}
+	// keep-tail-days == 0 (the write-only-table default) must emit NO seed at all.
+	if strings.Contains(got, "INSERT INTO") || strings.Contains(got, "make_interval") {
+		t.Errorf("keep-tail-days=0 must not seed the fresh table, but rotateSQL contains a seed:\n%s", got)
+	}
+}
+
+// keep-tail-days > 0 seeds the fresh table, in the rotate transaction, with the recent tail
+// of the archive so a live reader's rolling-window read survives the rotation boundary. It
+// must land AFTER the fresh CREATE TABLE (the target exists) and BEFORE COMMIT (atomic with
+// the rename), filter on the given column, and copy from the archive into the live table.
+func TestRotateSQL_KeepTailSeed(t *testing.T) {
+	got := rotateSQL("rearm", "metrics_audit", "metrics_audit_archive_20260825t120000z_deadbeef", "5s", 1, "", 4, "revision_created_date")
+	seed := "INSERT INTO rearm.metrics_audit SELECT * FROM rearm.metrics_audit_archive_20260825t120000z_deadbeef WHERE revision_created_date >= now() - make_interval(days => 4);"
+	if !strings.Contains(got, seed) {
+		t.Errorf("keep-tail seed missing or malformed; want %q in:\n%s", seed, got)
+	}
+	create := strings.Index(got, "CREATE TABLE rearm.metrics_audit (LIKE")
+	seedIdx := strings.Index(got, seed)
+	commit := strings.Index(got, "COMMIT;")
+	if !(create >= 0 && create < seedIdx && seedIdx < commit) {
+		t.Errorf("seed must fall between CREATE TABLE (%d) and COMMIT (%d) but is at %d:\n%s", create, commit, seedIdx, got)
+	}
 }
 
 // The rename-aside suffix MUST derive from the (unique) archive name, not the
@@ -122,8 +144,8 @@ func TestRotateSQL(t *testing.T) {
 // archives (the norm under retention) collide on `audit_pkey_<sfx>` and the second
 // rotation fails with `relation "audit_pkey_..." already exists`.
 func TestRotateSQL_RenameSuffixIsPerArchive(t *testing.T) {
-	a1 := rotateSQL("rearm", "audit", "audit_archive_20260720t100100z_05196fcc", "5s", 1, "")
-	a2 := rotateSQL("rearm", "audit", "audit_archive_20260720t112820z_d2337e60", "5s", 1, "")
+	a1 := rotateSQL("rearm", "audit", "audit_archive_20260720t100100z_05196fcc", "5s", 1, "", 0, "revision_created_date")
+	a2 := rotateSQL("rearm", "audit", "audit_archive_20260720t112820z_d2337e60", "5s", 1, "", 0, "revision_created_date")
 
 	if !strings.Contains(a1, "substr(md5('audit_archive_20260720t100100z_05196fcc'), 1, 8)") {
 		t.Errorf("rename suffix not derived from archive name in:\n%s", a1)

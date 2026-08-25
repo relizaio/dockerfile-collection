@@ -47,6 +47,8 @@ type AppConfig struct {
 	VerifyRestore    bool   `mapstructure:"verify-restore"`
 	DrainBacklog     bool   `mapstructure:"drain-backlog"`
 	DropInstanceRows bool   `mapstructure:"drop-instance-rows"`
+	KeepTailDays     int    `mapstructure:"keep-tail-days"`
+	KeepTailColumn   string `mapstructure:"keep-tail-column"`
 
 	// Shared fields
 	StorageType         string        `mapstructure:"backup-storage-type"`
@@ -216,6 +218,21 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 	// "now - interval days" cutoff away from int64 time.Duration overflow, so no separate cap.
 	if c.RotationInterval > c.RetentionDays {
 		return fmt.Errorf("--rotation-interval-days / ROTATION_INTERVAL_DAYS (%d) must be <= --audit-retention-days (%d): a larger interval is degenerate (retention drops the archive before the interval elapses)", c.RotationInterval, c.RetentionDays)
+	}
+	// keep-tail-days seeds the fresh table with the most recent N days of rows so a live
+	// reader querying the live table over a rolling date window (the finding-change repair
+	// sweep on metrics_audit) does not lose its lookback across a rotation boundary. 0 is
+	// pure rotation (correct for a write-only table). It must be <= retention: seeding more
+	// than you retain is degenerate (the source archive is dropped before that much tail
+	// exists), and retention is itself capped at maxAuditDays, which bounds the "now - N
+	// days" cutoff away from int64 overflow.
+	if c.KeepTailDays < 0 || c.KeepTailDays > c.RetentionDays {
+		return fmt.Errorf("--keep-tail-days / KEEP_TAIL_DAYS must be between 0 and --audit-retention-days (%d), got %d", c.RetentionDays, c.KeepTailDays)
+	}
+	// The column is interpolated into the seed's WHERE clause; constrain it like the schema
+	// and table names. Only meaningful when seeding.
+	if c.KeepTailDays > 0 && !sqlIdent.MatchString(c.KeepTailColumn) {
+		return fmt.Errorf("--keep-tail-column / KEEP_TAIL_COLUMN must be a valid SQL identifier, got %q", c.KeepTailColumn)
 	}
 	if !pgDuration.MatchString(c.LockTimeout) {
 		return fmt.Errorf("--lock-timeout / LOCK_TIMEOUT must be a PostgreSQL duration like 5s or 500ms, got %q", c.LockTimeout)

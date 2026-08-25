@@ -473,6 +473,9 @@ func TestValidatePGAuditRotate(t *testing.T) {
 		"huge retention":       func(c *AppConfig) { c.RetentionDays = maxAuditDays + 1 },
 		"neg interval":         func(c *AppConfig) { c.RotationInterval = -1 },
 		"interval > retention": func(c *AppConfig) { c.RotationInterval = 31 }, // retention is 30
+		"neg keep-tail":        func(c *AppConfig) { c.KeepTailDays = -1 },
+		"keep-tail > ret":      func(c *AppConfig) { c.KeepTailDays = 31 }, // retention is 30
+		"bad keep-tail col":    func(c *AppConfig) { c.KeepTailDays = 4; c.KeepTailColumn = "rev; drop" },
 		"empty lock":           func(c *AppConfig) { c.LockTimeout = "" },
 		"missing db":           func(c *AppConfig) { c.PGDatabase = "" },
 		"missing buck":         func(c *AppConfig) { c.AWSBucket = "" },
@@ -482,6 +485,21 @@ func TestValidatePGAuditRotate(t *testing.T) {
 		if err := (func() *AppConfig { c := base(); c.RotationInterval = iv; return c })().ValidatePGAuditRotate(); err != nil {
 			t.Errorf("rotation-interval-days=%d (<= retention) should pass: %v", iv, err)
 		}
+	}
+	// valid keep-tail settings: off (0, column irrelevant) and seeding with a valid column
+	for _, kt := range []int{0, 4, 30} {
+		if err := (func() *AppConfig {
+			c := base()
+			c.KeepTailDays = kt
+			c.KeepTailColumn = "revision_created_date"
+			return c
+		})().ValidatePGAuditRotate(); err != nil {
+			t.Errorf("keep-tail-days=%d (<= retention, valid column) should pass: %v", kt, err)
+		}
+	}
+	// a bad keep-tail column is IGNORED when not seeding (keep-tail-days=0)
+	if err := (func() *AppConfig { c := base(); c.KeepTailDays = 0; c.KeepTailColumn = "rev; drop"; return c })().ValidatePGAuditRotate(); err != nil {
+		t.Errorf("keep-tail-column is only validated when seeding; keep-tail-days=0 should pass: %v", err)
 	}
 	for name, mut := range bad {
 		t.Run(name, func(t *testing.T) {

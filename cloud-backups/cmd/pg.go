@@ -32,6 +32,8 @@ func init() {
 	pgCmd.PersistentFlags().Bool("verify-restore", false, "audit-rotate: before an aged-out drop, re-download the archive, decrypt it, run pg_restore -l (proves it's a restorable dump), and match its SHA-256 (full re-download; needs read access on the bucket). By default the run performs NO bucket read at all (ENV: VERIFY_RESTORE)")
 	pgCmd.PersistentFlags().Bool("drain-backlog", false, "audit-rotate: back up + drop the archive created THIS run immediately, regardless of retention age. Set only on the first/cutover run to reclaim the historical backlog now; retention accumulates from the next run. Keep false for the recurring cron. (ENV: DRAIN_BACKLOG)")
 	pgCmd.PersistentFlags().Bool("drop-instance-rows", false, "audit-rotate: proceed even if the audit table holds frozen entity_name='instances' rows (still read by the app but never re-written). Without this the run refuses when such rows exist. Setting it does NOT lose data (the rows are backed up to the permanent bucket like any archive) but the app's instance-revision reads return empty once those rows age out of the DB -- a conscious cutover choice. (ENV: DROP_INSTANCE_ROWS)")
+	pgCmd.PersistentFlags().Int("keep-tail-days", 0, "audit-rotate: after rotating, seed the fresh table with the most recent N days of rows from the just-sealed archive (by --keep-tail-column), so a live reader that queries the live table over a rolling date window keeps its lookback across the rotation boundary. 0 (default) = pure rotation, fresh table starts empty -- correct for a write-only table (audit). Set > the reader's lookback + cron period + margin for a table with such a reader (metrics_audit: the finding-change repair sweep, ~2d lookback + daily cron -> 4). The seed runs inside the rotate transaction, so the ACCESS EXCLUSIVE window becomes O(rows copied) not catalog-only; keep it small. Must be <= --audit-retention-days. (ENV: KEEP_TAIL_DAYS)")
+	pgCmd.PersistentFlags().String("keep-tail-column", "revision_created_date", "audit-rotate: the timestamptz/date column --keep-tail-days filters on (must be the SAME column the live reader's rolling window queries). Only used when --keep-tail-days > 0. (ENV: KEEP_TAIL_COLUMN)")
 
 	mustBindPFlag := func(key, flagName string) {
 		if err := viper.BindPFlag(key, pgCmd.PersistentFlags().Lookup(flagName)); err != nil {
@@ -51,5 +53,7 @@ func init() {
 	mustBindPFlag("verify-restore", "verify-restore")
 	mustBindPFlag("drain-backlog", "drain-backlog")
 	mustBindPFlag("drop-instance-rows", "drop-instance-rows")
+	mustBindPFlag("keep-tail-days", "keep-tail-days")
+	mustBindPFlag("keep-tail-column", "keep-tail-column")
 	mustBindPFlag("exclude-table", "exclude-table")
 }
