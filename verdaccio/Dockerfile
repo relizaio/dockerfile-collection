@@ -23,6 +23,13 @@ COPY package.json /verdaccio/plugins/verdaccio-age-filter/
 COPY config.yaml /verdaccio/conf/config.yaml
 RUN chown verdaccio -R /verdaccio
 
+# Drop the bundled npm CLI. A registry server never invokes it -- verdaccio is
+# a node script started by dumb-init, and neither the entrypoint nor the plugin
+# touches npm -- but it is by far the largest source of CVEs in the image
+# (tar, sigstore, brace-expansion, ip-address and picomatch findings all live
+# in npm's own vendored tree, not in verdaccio's). Node itself stays.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 USER verdaccio
 
 # Expose port
