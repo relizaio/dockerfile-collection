@@ -1,155 +1,98 @@
 #!/usr/bin/env node
+//
+// Verifies the age filter against live npmjs.org metadata.
+//
+//   node test-age-filter.js
+//   VERDACCIO_URL=http://verdaccio:4873 QUARANTINE_DAYS=10 node test-age-filter.js
+//
+// Exits non-zero when the filter misbehaves, so it can gate a build. For each
+// package it asserts three things, because the filter can fail in three ways:
+//   1. no version published inside the quarantine window is served (a leak is
+//      the failure this plugin exists to prevent);
+//   2. no version older than the window is missing (over-filtering would
+//      silently strip a registry down to nothing);
+//   3. every dist-tag resolves to a version the mirror actually serves -- an
+//      unreconciled tag makes `npm install pkg` fail outright rather than
+//      quietly install the older version, which is the whole point.
+//
+// Packages are chosen to publish often; one that happens to have had no
+// release inside the window can only prove (2) and (3), so that case is
+// called out rather than counted as strong evidence.
 
-const https = require('https');
-const http = require('http');
-
-// Test configuration
-const VERDACCIO_URL = 'http://localhost:4873';
+const VERDACCIO_URL = process.env.VERDACCIO_URL || 'http://localhost:4873';
 const NPMJS_URL = 'https://registry.npmjs.org';
+const QUARANTINE_DAYS = Number(process.env.QUARANTINE_DAYS || 7);
+const TEST_PACKAGES = (process.env.TEST_PACKAGES || 'eslint,@types/node,typescript,react,axios')
+    .split(',').map(s => s.trim()).filter(Boolean);
 
-// Test packages - choose packages that likely have recent versions
-const TEST_PACKAGES = [
-    'axios'
-];
+const WINDOW_MS = QUARANTINE_DAYS * 24 * 60 * 60 * 1000;
 
-async function fetchPackageMetadata(url, packageName) {
-    return new Promise((resolve, reject) => {
-        const client = url.startsWith('https') ? https : http;
-        
-        client.get(`${url}/${packageName}`, (res) => {
-            let data = '';
-            
-            res.on('data', (chunk) => {
-                data += chunk;
-            });
-            
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(data));
-                } catch (e) {
-                    reject(e);
-                }
-            });
-        }).on('error', reject);
+async function fetchMetadata (base, name) {
+    const res = await fetch(`${base}/${name.replace('/', '%2f')}`);
+    if (!res.ok) throw new Error(`GET ${base}/${name} -> HTTP ${res.status}`);
+    return res.json();
+}
+
+const ageMs = (time, version) =>
+    time && time[version] ? Date.now() - Date.parse(time[version]) : NaN;
+const days = ms => (ms / 86400000).toFixed(1);
+
+async function testPackage (name) {
+    const [upstream, mirror] = await Promise.all([
+        fetchMetadata(NPMJS_URL, name),
+        fetchMetadata(VERDACCIO_URL, name),
+    ]);
+
+    const upstreamVersions = Object.keys(upstream.versions || {});
+    const mirrored = new Set(Object.keys(mirror.versions || {}));
+    const inWindow = upstreamVersions.filter(v => ageMs(upstream.time, v) < WINDOW_MS);
+    const aged = upstreamVersions.filter(v => ageMs(upstream.time, v) >= WINDOW_MS);
+
+    const leaked = inWindow.filter(v => mirrored.has(v));
+    const dropped = aged.filter(v => !mirrored.has(v));
+
+    const tags = mirror['dist-tags'] || {};
+    const unresolvable = Object.entries(tags).filter(([, v]) => !mirrored.has(v));
+    const staleTagged = Object.entries(tags).filter(([, v]) => ageMs(upstream.time, v) < WINDOW_MS);
+
+    const ok = !leaked.length && !dropped.length && !unresolvable.length && !staleTagged.length;
+
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`);
+    console.log(`      upstream ${upstreamVersions.length} versions, ${inWindow.length} inside the ${QUARANTINE_DAYS}d window; mirror serves ${mirrored.size}`);
+    if (inWindow.length) {
+        const newest = inWindow.sort((a, b) => ageMs(upstream.time, a) - ageMs(upstream.time, b))[0];
+        console.log(`      newest upstream ${newest} (${days(ageMs(upstream.time, newest))}d old) -> ${mirrored.has(newest) ? 'LEAKED' : 'withheld'}`);
+    } else {
+        console.log('      no upstream release inside the window -- this package cannot prove filtering');
+    }
+    console.log(`      dist-tags.latest: upstream ${upstream['dist-tags']?.latest} / mirror ${tags.latest}`);
+    if (leaked.length) console.log(`      LEAKED: ${leaked.join(', ')}`);
+    if (dropped.length) console.log(`      OVER-FILTERED: ${dropped.slice(0, 5).join(', ')}${dropped.length > 5 ? ` +${dropped.length - 5} more` : ''}`);
+    if (unresolvable.length) console.log(`      UNRESOLVABLE TAGS: ${unresolvable.map(([t, v]) => `${t}=${v}`).join(', ')}`);
+    if (staleTagged.length) console.log(`      TAGS POINT INSIDE WINDOW: ${staleTagged.map(([t, v]) => `${t}=${v}`).join(', ')}`);
+
+    return ok;
+}
+
+async function main () {
+    console.log(`Age filter check -- mirror ${VERDACCIO_URL}, quarantine ${QUARANTINE_DAYS} days`);
+
+    const ping = await fetch(`${VERDACCIO_URL}/-/ping`).catch(e => {
+        throw new Error(`cannot reach ${VERDACCIO_URL}: ${e.message}`);
     });
-}
+    if (!ping.ok) throw new Error(`${VERDACCIO_URL}/-/ping -> HTTP ${ping.status}`);
 
-function analyzeVersions(metadata, source) {
-    if (!metadata.versions) {
-        return { total: 0, recent: 0, old: 0 };
-    }
-    
-    const quarantineDays = 10 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    
-    let total = 0;
-    let recent = 0; // Less than 7 days old
-    let old = 0;    // 7+ days old
-    
-    for (const [version, data] of Object.entries(metadata.versions)) {
-        total++;
-        const publishedStr = metadata.time?.[version];
-        const publishedAt = publishedStr ? Date.parse(publishedStr) : NaN;
-        const age = Number.isFinite(publishedAt) ? (now - publishedAt) : 0;
-        
-        // console.log(`Version ${version} is ${age}ms old`);
-        if (age < quarantineDays) {
-            recent++;
-        } else {
-            old++;
+    let failed = 0;
+    for (const name of TEST_PACKAGES) {
+        try {
+            if (!await testPackage(name)) failed++;
+        } catch (e) {
+            console.log(`ERROR ${name}: ${e.message}`);
+            failed++;
         }
     }
-    
-    console.log(`\n${source} - ${metadata.name}:`);
-    console.log(`  Total versions: ${total}`);
-    console.log(`  Recent versions (< 7 days): ${recent}`);
-    console.log(`  Old versions (>= 7 days): ${old}`);
-    
-    return { total, recent, old };
+    console.log(`\n${failed ? `${failed} of ${TEST_PACKAGES.length} FAILED` : `all ${TEST_PACKAGES.length} packages pass`}`);
+    process.exit(failed ? 1 : 0);
 }
 
-async function testPackage(packageName) {
-    console.log(`\n${'='.repeat(50)}`);
-    console.log(`Testing package: ${packageName}`);
-    console.log(`${'='.repeat(50)}`);
-    
-    try {
-        // Fetch from npmjs.org (original)
-        console.log('Fetching from npmjs.org...');
-        const npmjsData = await fetchPackageMetadata(NPMJS_URL, packageName);
-        const npmjsStats = analyzeVersions(npmjsData, 'NPMJS.ORG');
-        
-        // Fetch from Verdaccio (filtered)
-        console.log('\nFetching from Verdaccio...');
-        const verdaccioData = await fetchPackageMetadata(VERDACCIO_URL, packageName);
-        const verdaccioStats = analyzeVersions(verdaccioData, 'VERDACCIO (FILTERED)');
-        
-        // Analysis
-        console.log(`\n📊 ANALYSIS:`);
-        console.log(`  Original total versions: ${npmjsStats.total}`);
-        console.log(`  Filtered total versions: ${verdaccioStats.total}`);
-        console.log(`  Versions filtered out: ${npmjsStats.total - verdaccioStats.total}`);
-        console.log(`  Recent versions in original: ${npmjsStats.recent}`);
-        console.log(`  Recent versions in filtered: ${verdaccioStats.recent}`);
-        
-        // Verification
-        if (verdaccioStats.recent === 0 && npmjsStats.recent > 0) {
-            console.log(`✅ SUCCESS: Age filter is working! ${npmjsStats.recent} recent versions were filtered out.`);
-        } else if (npmjsStats.recent === 0) {
-            console.log(`ℹ  INFO: No recent versions found in this package to filter.`);
-        } else {
-            console.log(`❌ WARNING: Age filter may not be working. Recent versions still present.`);
-        }
-        
-    } catch (error) {
-        console.error(`❌ Error testing ${packageName}:`, error.message);
-    }
-}
-
-async function runTests() {
-    console.log('🧪 Testing Verdaccio Age Filter Plugin');
-    console.log('=====================================');
-    console.log(`Verdaccio URL: ${VERDACCIO_URL}`);
-    console.log(`Test packages: ${TEST_PACKAGES.join(', ')}`);
-    
-    // Test Verdaccio connectivity first
-    try {
-        console.log('\n🔍 Testing Verdaccio connectivity...');
-        // Test with a simple ping endpoint instead of package metadata
-        const pingResponse = await new Promise((resolve, reject) => {
-            const client = VERDACCIO_URL.startsWith('https') ? https : http;
-            client.get(`${VERDACCIO_URL}/-/ping`, (res) => {
-                let data = '';
-                res.on('data', (chunk) => data += chunk);
-                res.on('end', () => resolve({ statusCode: res.statusCode, data }));
-            }).on('error', reject);
-        });
-        
-        if (pingResponse.statusCode === 200) {
-            console.log('✅ Verdaccio is accessible');
-        } else {
-            throw new Error(`Unexpected status code: ${pingResponse.statusCode}`);
-        }
-    } catch (error) {
-        console.error('❌ Cannot connect to Verdaccio:', error.message);
-        console.log('Make sure Verdaccio is running on http://localhost:4873');
-        return;
-    }
-    
-    // Run tests for each package
-    for (const packageName of TEST_PACKAGES) {
-        await testPackage(packageName);
-        
-        // Add delay between requests to be nice to the registries
-        await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
-    console.log('\n🏁 Testing completed!');
-    console.log('\nTo manually verify:');
-    console.log('1. Visit http://localhost:4873 in your browser');
-    console.log('2. Search for a popular package like "react"');
-    console.log('3. Check if recent versions (< 7 days old) are missing');
-}
-
-// Run the tests
-runTests().catch(console.error);
+main().catch(e => { console.error(`ERROR: ${e.message}`); process.exit(1); });

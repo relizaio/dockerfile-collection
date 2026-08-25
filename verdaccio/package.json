@@ -1,7 +1,7 @@
 {
   "name": "verdaccio-age-filter",
-  "version": "1.0.0",
-  "description": "Verdaccio plugin to filter packages older than 7 days",
+  "version": "1.1.0",
+  "description": "Verdaccio plugin that withholds npm package versions younger than a configurable quarantine period",
   "main": "./age-filter-plugin.js",
   "scripts": {
     "build": "tsc",
@@ -22,11 +22,8 @@
   },
   "author": "",
   "license": "MIT",
-  "dependencies": {
-    "@verdaccio/types": "^10.0.0"
-  },
   "devDependencies": {
-    "typescript": "^5.0.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^7.0.2",
+    "@types/node": "^26.3.0"
   }
 }

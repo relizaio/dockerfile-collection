@@ -11,7 +11,11 @@ This project creates a custom Verdaccio Docker image that includes an age filter
 
 ## Files
 
-- `Dockerfile` - Builds the custom Verdaccio image (used by docker-compose)
+- `Dockerfile` - Builds the custom Verdaccio image (used by docker-compose). Two
+  stages: the plugin's TypeScript is compiled in a stage that is then discarded,
+  so the shipped image carries the compiled `.js` and nothing else -- the plugin
+  imports no modules at runtime, so it needs no `node_modules` of its own, and
+  `typescript` / `@types/node` never reach the published image or its SBOM.
 - `docker-compose.yml` - Compose file to build and run the service
 - `config.yaml` - Verdaccio configuration with proxy and plugin settings
 - `age-filter-plugin.ts` - TypeScript plugin source code
@@ -97,6 +101,20 @@ The plugin logs filtering activity to help you monitor its operation:
 - All package requests are proxied through npmjs.org
 - Storage is persistent through Docker volumes
 
+## Verifying the filter
+
+`test-age-filter.js` compares the mirror against live `registry.npmjs.org`
+metadata and **exits non-zero** if the filter misbehaves, so it can gate a
+build. Per package it asserts that no version published inside the window is
+served, that no version older than the window went missing (over-filtering),
+and that every `dist-tag` resolves to a version the mirror actually serves --
+an unreconciled tag makes `npm install pkg` fail outright instead of quietly
+resolving the older version.
+
+It reads `VERDACCIO_URL` (default `http://localhost:4873`), `QUARANTINE_DAYS`
+(default `7`) and `TEST_PACKAGES` (a comma-separated list; the defaults are
+packages that publish often enough to have releases inside a typical window).
+
 ## Test Steps
 
 ```bash
@@ -111,3 +129,6 @@ sleep 10
 
 # Test the age filter
 node test-age-filter.js
+
+# or against a container on a docker network, with an explicit window:
+VERDACCIO_URL=http://verdaccio-age-filter:4873 QUARANTINE_DAYS=10 node test-age-filter.js

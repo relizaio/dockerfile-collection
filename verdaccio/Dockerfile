@@ -1,28 +1,42 @@
-FROM verdaccio/verdaccio:6.3.2@sha256:3f533981ed514088088df91cf57fcb422c5a5193e657dd609b6bca425b81c13c
+# The plugin is TypeScript, but nothing it needs at runtime is: it imports
+# no modules, so the compiled .js plus a package.json (which is how Verdaccio
+# discovers the filter) is the whole runtime footprint. Compiling in a
+# discarded stage keeps typescript/@types/node -- build-time only -- out of
+# the shipped image, so they cannot show up in its SBOM or its CVE count.
+FROM verdaccio/verdaccio:6.10.0@sha256:7dacad0ad776219bd0fd88ebbc2156fa7849041aed9bc99796e1e7cf7a29b141 AS plugin-build
 
-# Switch to root to install dependencies
 USER root
+WORKDIR /build
+COPY package.json package-lock.json tsconfig.json age-filter-plugin.ts ./
+RUN npm ci --include=dev && npx tsc -p tsconfig.json
 
-# Create plugin directory under node_modules so Verdaccio can discover it by package name
+FROM verdaccio/verdaccio:6.10.0@sha256:7dacad0ad776219bd0fd88ebbc2156fa7849041aed9bc99796e1e7cf7a29b141
+
+# Verdaccio discovers a filter by package name under the plugins directory.
+USER root
 RUN mkdir -p /verdaccio/plugins/verdaccio-age-filter
 
-# Copy plugin files
+COPY --from=plugin-build /build/age-filter-plugin.js /verdaccio/plugins/verdaccio-age-filter/
 COPY package.json /verdaccio/plugins/verdaccio-age-filter/
-COPY package-lock.json /verdaccio/plugins/verdaccio-age-filter/
-COPY age-filter-plugin.ts /verdaccio/plugins/verdaccio-age-filter/
-COPY tsconfig.json /verdaccio/plugins/verdaccio-age-filter/
 
-# Copy Verdaccio configuration
+# Verdaccio configuration
 COPY config.yaml /verdaccio/conf/config.yaml
 RUN chown verdaccio -R /verdaccio
 
-# Switch back to verdaccio user BEFORE npm operations
-USER verdaccio
+# Drop the bundled npm CLI: a registry server never invokes it -- verdaccio is
+# a node script started by dumb-init, and neither the entrypoint nor the plugin
+# touches npm -- so nothing needs it and a compromised container cannot use it
+# to pull tooling. Node itself stays.
+#
+# Note what this does NOT do. npm arrives in a base-image layer we do not own,
+# so deleting it here only whites it out of the final filesystem; the bytes
+# still ship, and any scanner reading all layers (which is what our CI SBOM
+# does) still reports npm's vendored tree -- tar, sigstore, brace-expansion,
+# ip-address, picomatch. Removing those findings needs a runtime base that
+# never had npm, not a deletion on top of one that did.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
-# Install plugin dependencies and build (now as non-root user)
-WORKDIR /verdaccio/plugins/verdaccio-age-filter
-RUN npm ci --include=dev
-RUN npx tsc -p /verdaccio/plugins/verdaccio-age-filter/tsconfig.json
+USER verdaccio
 
 # Expose port
 EXPOSE 4873
