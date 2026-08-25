@@ -115,6 +115,34 @@ func TestRotateSQL(t *testing.T) {
 	if strings.Index(got, "pg_try_advisory_xact_lock") > strings.Index(got, "ALTER TABLE rearm.audit RENAME") {
 		t.Errorf("advisory-lock guard must precede the RENAME in:\n%s", got)
 	}
+	// The rename transaction must be catalog-only: NO seed INSERT inside it (that would hold
+	// ACCESS EXCLUSIVE for O(rows) and block writers). Seeding is a separate post-commit step.
+	if strings.Contains(got, "INSERT INTO") || strings.Contains(got, "make_interval") {
+		t.Errorf("rotateSQL must be catalog-only (no in-transaction seed), but contains one:\n%s", got)
+	}
+}
+
+// The keep-tail seed is a SEPARATE post-commit statement (not inside rotateSQL): it copies the
+// recent tail from the archive into the fresh live table so a live reader's rolling-window read
+// survives the rotation boundary. It must filter on the given column, be idempotent (ON CONFLICT
+// DO NOTHING), and NOT open a transaction (so its INSERT takes only ROW EXCLUSIVE, off the
+// rename's exclusive-lock path).
+func TestSeedTailSQL(t *testing.T) {
+	got := seedTailSQL("rearm", "metrics_audit", "metrics_audit_archive_20260825t120000z_deadbeef", "revision_created_date", 4, "5s")
+	for _, want := range []string{
+		"INSERT INTO rearm.metrics_audit SELECT * FROM rearm.metrics_audit_archive_20260825t120000z_deadbeef",
+		"WHERE revision_created_date >= now() - make_interval(days => 4)",
+		"ON CONFLICT DO NOTHING",
+		"SET lock_timeout = '5s';",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("seedTailSQL missing %q in:\n%s", want, got)
+		}
+	}
+	// must NOT be wrapped in an explicit transaction -- it runs off the rename's exclusive path
+	if strings.Contains(got, "BEGIN;") {
+		t.Errorf("seedTailSQL must not open a transaction:\n%s", got)
+	}
 }
 
 // The rename-aside suffix MUST derive from the (unique) archive name, not the
@@ -141,6 +169,20 @@ func TestRotateSQL_RenameSuffixIsPerArchive(t *testing.T) {
 	}
 	if sfx(a1) == sfx(a2) {
 		t.Errorf("two distinct archives produced the SAME rename suffix expression:\n%s", sfx(a1))
+	}
+}
+
+func TestGeneratedColumnsSQL(t *testing.T) {
+	got := generatedColumnsSQL("rearm", "metrics_audit")
+	for _, want := range []string{
+		"count(*)",
+		"table_schema = 'rearm'",
+		"table_name = 'metrics_audit'",
+		"is_generated = 'ALWAYS'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generatedColumnsSQL missing %q in:\n%s", want, got)
+		}
 	}
 }
 

@@ -92,6 +92,8 @@ func runPGAuditRotate() error {
 		VerifyRestore:       viper.GetBool("verify-restore"),
 		DrainBacklog:        viper.GetBool("drain-backlog"),
 		DropInstanceRows:    viper.GetBool("drop-instance-rows"),
+		KeepTailDays:        viper.GetInt("keep-tail-days"),
+		KeepTailColumn:      viper.GetString("keep-tail-column"),
 		StorageType:         viper.GetString("backup-storage-type"),
 		EncryptionPassword:  viper.GetString("encryption-password"),
 		DumpPrefix:          viper.GetString("dump-prefix"),
@@ -204,6 +206,42 @@ func runPGAuditRotate() error {
 		}
 	}
 
+	// Preflight: keep-tail seeding filters on KeepTailColumn, so it must exist on the table.
+	// Fail loudly here rather than let the rotate transaction blow up mid-rename on an
+	// unknown column (which would roll back and wedge every run silently). No-op when not
+	// seeding (KeepTailDays == 0, the write-only-table default).
+	if cfg.KeepTailDays > 0 {
+		hasKeepTailCol, err := pgClient.QueryRows(ctx, columnExistsSQL(cfg.PGSchema, cfg.AuditTable, cfg.KeepTailColumn))
+		if err != nil {
+			slog.Error("keep_tail_column_check_failed", "error", err.Error())
+			return err
+		}
+		if len(hasKeepTailCol) != 1 || hasKeepTailCol[0] != "t" {
+			err := fmt.Errorf("--keep-tail-days=%d needs column %q on %s.%s to seed the fresh table's recent tail, but that column is absent; a live reader's rolling-window read would lose its lookback across each rotation. Set --keep-tail-column to the table's rolling-window timestamp, or --keep-tail-days=0 for a pure (write-only-table) rotation", cfg.KeepTailDays, cfg.KeepTailColumn, cfg.PGSchema, cfg.AuditTable)
+			slog.Error("keep_tail_column_absent_refusing", "error", err.Error())
+			return err
+		}
+		// The seed is INSERT ... SELECT * , which fails on a STORED generated column
+		// ("cannot insert a non-DEFAULT value into ... a generated column"). That would roll
+		// back the rotate transaction and wedge every run with an opaque error. assertNoOwned
+		// SequenceSQL already refuses identity/serial, but not GENERATED ALWAYS AS ... STORED;
+		// refuse it here (only when seeding -- pure rotation never inserts, so it is unaffected).
+		genCols, err := pgClient.QueryRows(ctx, generatedColumnsSQL(cfg.PGSchema, cfg.AuditTable))
+		if err != nil {
+			slog.Error("keep_tail_generated_column_check_failed", "error", err.Error())
+			return err
+		}
+		if len(genCols) != 1 || genCols[0] != "0" {
+			got := "an unexpected count result"
+			if len(genCols) == 1 {
+				got = genCols[0] + " generated column(s)"
+			}
+			err := fmt.Errorf("--keep-tail-days=%d seeds via INSERT ... SELECT *, which cannot write %s.%s's %s (STORED generated columns reject a non-DEFAULT value); keep-tail cannot seed this table. Use --keep-tail-days=0, or remove the generated column", cfg.KeepTailDays, cfg.PGSchema, cfg.AuditTable, got)
+			slog.Error("keep_tail_generated_column_present_refusing", "error", err.Error())
+			return err
+		}
+	}
+
 	now := time.Now()
 	tracker := stats.New()
 	backend := newPGArchiveBackend(pgClient, storeProvider, cfg)
@@ -274,6 +312,7 @@ func runPGAuditRotate() error {
 	rotate, skipReason := rotationDecision(cfg, now, newestRot, haveNewest)
 
 	rotated := false
+	keepTailSeeded := false
 	if rotate {
 		// Pass 2: rotate -- rename the live table aside and stand up a fresh EMPTY one
 		// (fail-safe on lock contention). The new archive is RETAINED for the retention
@@ -300,6 +339,24 @@ func runPGAuditRotate() error {
 			}
 		} else {
 			rotated = true
+			// Keep-tail seed (only when configured): copy the recent tail from the archive
+			// into the fresh table so a live reader's rolling window survives the rotation.
+			// Runs here, AFTER the rename transaction has committed, so the writer-blocking
+			// ACCESS EXCLUSIVE window stayed catalog-only; this INSERT takes only ROW EXCLUSIVE
+			// (does not block writers) even though it copies O(rows). Must run BEFORE the
+			// --drain-backlog drop below, which would otherwise remove the source archive.
+			// Non-fatal: the rotation already succeeded (disk relief done); a failed seed only
+			// leaves the fresh table without its tail until the next rotation, so the repair
+			// sweep could miss its lookback for that window -- log at ERROR for alerting.
+			if cfg.KeepTailDays > 0 {
+				seedStart := time.Now()
+				if serr := pgClient.Exec(ctx, seedTailSQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.KeepTailColumn, cfg.KeepTailDays, cfg.LockTimeout)); serr != nil {
+					slog.Error("keep_tail_seed_failed", "archive", archive, "keep_tail_days", cfg.KeepTailDays, "error", serr.Error())
+				} else {
+					keepTailSeeded = true
+					slog.Info("keep_tail_seeded", "archive", archive, "keep_tail_days", cfg.KeepTailDays, "duration_ms", time.Since(seedStart).Milliseconds())
+				}
+			}
 			// Deliberately NO upload here. The archive is retained on disk and will be
 			// dumped when it ages out, by the very run that drops it. --drain-backlog is
 			// the one-off cutover that reclaims the historical backlog immediately, so it
@@ -344,7 +401,9 @@ func runPGAuditRotate() error {
 		"rotation_skipped_reason", rotationSkippedReason,
 		"newest_archive_age_days", newestAgeDays,
 		"oldest_archive_age_days", oldestArchiveAgeDays(current, cfg.AuditTable, now),
-		"retention_days", cfg.RetentionDays)
+		"retention_days", cfg.RetentionDays,
+		"keep_tail_days", cfg.KeepTailDays,
+		"keep_tail_seeded", keepTailSeeded)
 
 	stats.PrintSummary("pg_audit_rotate_completed", tracker, cfg.StorageType, time.Since(now))
 	// Report the specific failure first: the generic tracker check below also fires for a
@@ -683,6 +742,14 @@ func columnExistsSQL(schema, table, column string) string {
 	return fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '%s' AND table_name = '%s' AND column_name = '%s');", schema, table, column)
 }
 
+// generatedColumnsSQL counts STORED generated columns (is_generated = 'ALWAYS') on the
+// table. The keep-tail seed is INSERT ... SELECT *, which Postgres rejects on such a column,
+// so the keep-tail preflight refuses when this is non-zero. Identity/serial columns are a
+// separate case already covered by assertNoOwnedSequenceSQL.
+func generatedColumnsSQL(schema, table string) string {
+	return fmt.Sprintf("SELECT count(*) FROM information_schema.columns WHERE table_schema = '%s' AND table_name = '%s' AND is_generated = 'ALWAYS';", schema, table)
+}
+
 // nonOwnerGrantsSQL lists the roles (or PUBLIC) that hold a GRANT on the audit table
 // other than its owner. CREATE TABLE ... LIKE ... INCLUDING ALL copies neither table
 // ownership nor ACLs, so any such grant silently vanishes on the fresh table after a
@@ -834,6 +901,13 @@ func rotationDecision(cfg *config.AppConfig, now, newestRot time.Time, haveNewes
 // backward far enough that a concurrent winner's name sorts below newestSeen (needs
 // multiple rotations inside one wall-second plus a clock step; not operationally reachable,
 // same NTP assumption newArchiveName already notes).
+//
+// This transaction is CATALOG-ONLY (rename + CREATE LIKE), so its ACCESS EXCLUSIVE window is
+// ~milliseconds even on a multi-GB table -- concurrent writers block only briefly. The
+// keep-tail seed is deliberately NOT done here: seeding inside this transaction would hold
+// ACCESS EXCLUSIVE for O(rows copied) (measured multi-second on a large recent window),
+// blocking every writer. It runs as a separate post-commit statement instead (seedTailSQL),
+// which takes only ROW EXCLUSIVE and does not block writers.
 func rotateSQL(schema, audit, archive, lockTimeout string, lockKey int64, newestSeen string) string {
 	return fmt.Sprintf(`BEGIN;
 SET LOCAL lock_timeout = '%[4]s';
@@ -868,6 +942,28 @@ $ROT$;
 CREATE TABLE %[1]s.%[2]s (LIKE %[1]s.%[3]s INCLUDING ALL);
 COMMIT;
 `, schema, audit, archive, lockTimeout, lockKey, rotateSkipToken, newestSeen)
+}
+
+// seedTailSQL copies the most recent keepTailDays of rows from the just-sealed archive into
+// the fresh live table, filtered on keepTailColumn. It runs AFTER rotateSQL has committed --
+// as its own statement, NOT inside the rename transaction -- so the writer-blocking ACCESS
+// EXCLUSIVE window stays catalog-only (~ms) regardless of how many rows the window holds; this
+// INSERT takes only ROW EXCLUSIVE, which does not block concurrent writers (measured: the copy
+// is O(rows), multi-second on a large window, but off the exclusive-lock path). It exists so a
+// live reader that queries the live table over a rolling date window (the finding-change repair
+// sweep: metrics_audit WHERE revision_created_date >= now()-lookback) keeps its lookback across
+// a rotation -- a pure rotation empties the live table and the sweep would lose its self-heal
+// for up to that lookback (a permanent v3 hole). Seeding the SAME column the reader filters on
+// keeps the window resident. ON CONFLICT DO NOTHING makes it idempotent and safe against the
+// races the post-commit placement admits: a concurrent app write cannot collide (new rows use a
+// higher metrics_revision than any seeded row) but the guard costs nothing and makes a re-run a
+// no-op. lock_timeout keeps it fail-safe. Because the seed re-copies the tail, consecutive
+// archives OVERLAP by ~keepTailDays; a consumer that UNIONs archives must dedupe by PK (the live
+// table never duplicates; idempotent consumers like the backfill are unaffected).
+func seedTailSQL(schema, audit, archive, keepTailColumn string, keepTailDays int, lockTimeout string) string {
+	return fmt.Sprintf(`SET lock_timeout = '%[6]s';
+INSERT INTO %[1]s.%[2]s SELECT * FROM %[1]s.%[3]s WHERE %[4]s >= now() - make_interval(days => %[5]d) ON CONFLICT DO NOTHING;`,
+		schema, audit, archive, keepTailColumn, keepTailDays, lockTimeout)
 }
 
 func init() {
