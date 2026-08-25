@@ -312,6 +312,7 @@ func runPGAuditRotate() error {
 	rotate, skipReason := rotationDecision(cfg, now, newestRot, haveNewest)
 
 	rotated := false
+	keepTailSeeded := false
 	if rotate {
 		// Pass 2: rotate -- rename the live table aside and stand up a fresh EMPTY one
 		// (fail-safe on lock contention). The new archive is RETAINED for the retention
@@ -328,7 +329,7 @@ func runPGAuditRotate() error {
 		// second would otherwise rotate the fresh EMPTY table into a stray archive that
 		// squats for a whole retention window). A guarded abort is a benign skip, not a
 		// failure -- another run already did the rotation.
-		if err := pgClient.Exec(ctx, rotateSQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.LockTimeout, advisoryLockKey(cfg.PGSchema, cfg.AuditTable), newestSeen, cfg.KeepTailDays, cfg.KeepTailColumn)); err != nil {
+		if err := pgClient.Exec(ctx, rotateSQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.LockTimeout, advisoryLockKey(cfg.PGSchema, cfg.AuditTable), newestSeen)); err != nil {
 			if isRotateSkip(err) {
 				slog.Info("rotation_skipped_concurrent", "archive", archive, "reason", "another run rotated concurrently (advisory-lock/supersession guard)")
 				skipReason = "concurrent rotation by another run"
@@ -338,6 +339,24 @@ func runPGAuditRotate() error {
 			}
 		} else {
 			rotated = true
+			// Keep-tail seed (only when configured): copy the recent tail from the archive
+			// into the fresh table so a live reader's rolling window survives the rotation.
+			// Runs here, AFTER the rename transaction has committed, so the writer-blocking
+			// ACCESS EXCLUSIVE window stayed catalog-only; this INSERT takes only ROW EXCLUSIVE
+			// (does not block writers) even though it copies O(rows). Must run BEFORE the
+			// --drain-backlog drop below, which would otherwise remove the source archive.
+			// Non-fatal: the rotation already succeeded (disk relief done); a failed seed only
+			// leaves the fresh table without its tail until the next rotation, so the repair
+			// sweep could miss its lookback for that window -- log at ERROR for alerting.
+			if cfg.KeepTailDays > 0 {
+				seedStart := time.Now()
+				if serr := pgClient.Exec(ctx, seedTailSQL(cfg.PGSchema, cfg.AuditTable, archive, cfg.KeepTailColumn, cfg.KeepTailDays, cfg.LockTimeout)); serr != nil {
+					slog.Error("keep_tail_seed_failed", "archive", archive, "keep_tail_days", cfg.KeepTailDays, "error", serr.Error())
+				} else {
+					keepTailSeeded = true
+					slog.Info("keep_tail_seeded", "archive", archive, "keep_tail_days", cfg.KeepTailDays, "duration_ms", time.Since(seedStart).Milliseconds())
+				}
+			}
 			// Deliberately NO upload here. The archive is retained on disk and will be
 			// dumped when it ages out, by the very run that drops it. --drain-backlog is
 			// the one-off cutover that reclaims the historical backlog immediately, so it
@@ -383,7 +402,8 @@ func runPGAuditRotate() error {
 		"newest_archive_age_days", newestAgeDays,
 		"oldest_archive_age_days", oldestArchiveAgeDays(current, cfg.AuditTable, now),
 		"retention_days", cfg.RetentionDays,
-		"keep_tail_days", cfg.KeepTailDays)
+		"keep_tail_days", cfg.KeepTailDays,
+		"keep_tail_seeded", keepTailSeeded)
 
 	stats.PrintSummary("pg_audit_rotate_completed", tracker, cfg.StorageType, time.Since(now))
 	// Report the specific failure first: the generic tracker check below also fires for a
@@ -882,32 +902,13 @@ func rotationDecision(cfg *config.AppConfig, now, newestRot time.Time, haveNewes
 // multiple rotations inside one wall-second plus a clock step; not operationally reachable,
 // same NTP assumption newArchiveName already notes).
 //
-// keepTailDays > 0 seeds the fresh table, in the SAME transaction, with the most recent
-// keepTailDays of rows from the just-sealed archive (filtered by keepTailColumn). This
-// exists for a table with a LIVE reader that queries the live table over a rolling date
-// window -- the finding-change repair sweep reads metrics_audit WHERE revision_created_date
-// >= now()-lookback. Pure rotation empties the live table, so for up to that lookback after
-// each rotation the sweep's window would fall entirely into the archive and it would lose
-// its self-heal (a permanent v3 hole). Seeding the same column the reader filters on keeps
-// the whole window resident in the live table. The seed is atomic with the rename (the
-// fresh table is not yet visible to other sessions, so a plain INSERT cannot conflict, and
-// a failure rolls back the whole rotation to retry cleanly next run); the cost is that the
-// ACCESS EXCLUSIVE window becomes O(rows copied) rather than catalog-only, so keepTailDays
-// must stay small. 0 (default) writes no seed and is byte-for-byte the old behaviour --
-// correct for a write-only table (audit).
-//
-// One consequence for the ARCHIVE side: a seeded row is re-copied into the next live table
-// and therefore into the next archive too, so consecutive archives OVERLAP by ~keepTailDays
-// (a row spans ceil(keepTailDays / rotation cadence) archives). The live table itself never
-// duplicates -- the reader is fine -- but a consumer that UNIONs archives to reconstruct
-// history must dedupe by primary key. Idempotent consumers (the finding-change backfill, ON
-// CONFLICT DO NOTHING) are unaffected.
-func rotateSQL(schema, audit, archive, lockTimeout string, lockKey int64, newestSeen string, keepTailDays int, keepTailColumn string) string {
-	keepTailSeed := ""
-	if keepTailDays > 0 {
-		keepTailSeed = fmt.Sprintf("INSERT INTO %[1]s.%[2]s SELECT * FROM %[1]s.%[3]s WHERE %[4]s >= now() - make_interval(days => %[5]d);\n",
-			schema, audit, archive, keepTailColumn, keepTailDays)
-	}
+// This transaction is CATALOG-ONLY (rename + CREATE LIKE), so its ACCESS EXCLUSIVE window is
+// ~milliseconds even on a multi-GB table -- concurrent writers block only briefly. The
+// keep-tail seed is deliberately NOT done here: seeding inside this transaction would hold
+// ACCESS EXCLUSIVE for O(rows copied) (measured multi-second on a large recent window),
+// blocking every writer. It runs as a separate post-commit statement instead (seedTailSQL),
+// which takes only ROW EXCLUSIVE and does not block writers.
+func rotateSQL(schema, audit, archive, lockTimeout string, lockKey int64, newestSeen string) string {
 	return fmt.Sprintf(`BEGIN;
 SET LOCAL lock_timeout = '%[4]s';
 SET LOCAL statement_timeout = 0;
@@ -939,8 +940,30 @@ BEGIN
 END
 $ROT$;
 CREATE TABLE %[1]s.%[2]s (LIKE %[1]s.%[3]s INCLUDING ALL);
-%[8]sCOMMIT;
-`, schema, audit, archive, lockTimeout, lockKey, rotateSkipToken, newestSeen, keepTailSeed)
+COMMIT;
+`, schema, audit, archive, lockTimeout, lockKey, rotateSkipToken, newestSeen)
+}
+
+// seedTailSQL copies the most recent keepTailDays of rows from the just-sealed archive into
+// the fresh live table, filtered on keepTailColumn. It runs AFTER rotateSQL has committed --
+// as its own statement, NOT inside the rename transaction -- so the writer-blocking ACCESS
+// EXCLUSIVE window stays catalog-only (~ms) regardless of how many rows the window holds; this
+// INSERT takes only ROW EXCLUSIVE, which does not block concurrent writers (measured: the copy
+// is O(rows), multi-second on a large window, but off the exclusive-lock path). It exists so a
+// live reader that queries the live table over a rolling date window (the finding-change repair
+// sweep: metrics_audit WHERE revision_created_date >= now()-lookback) keeps its lookback across
+// a rotation -- a pure rotation empties the live table and the sweep would lose its self-heal
+// for up to that lookback (a permanent v3 hole). Seeding the SAME column the reader filters on
+// keeps the window resident. ON CONFLICT DO NOTHING makes it idempotent and safe against the
+// races the post-commit placement admits: a concurrent app write cannot collide (new rows use a
+// higher metrics_revision than any seeded row) but the guard costs nothing and makes a re-run a
+// no-op. lock_timeout keeps it fail-safe. Because the seed re-copies the tail, consecutive
+// archives OVERLAP by ~keepTailDays; a consumer that UNIONs archives must dedupe by PK (the live
+// table never duplicates; idempotent consumers like the backfill are unaffected).
+func seedTailSQL(schema, audit, archive, keepTailColumn string, keepTailDays int, lockTimeout string) string {
+	return fmt.Sprintf(`SET lock_timeout = '%[6]s';
+INSERT INTO %[1]s.%[2]s SELECT * FROM %[1]s.%[3]s WHERE %[4]s >= now() - make_interval(days => %[5]d) ON CONFLICT DO NOTHING;`,
+		schema, audit, archive, keepTailColumn, keepTailDays, lockTimeout)
 }
 
 func init() {
