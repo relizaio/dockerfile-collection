@@ -221,6 +221,25 @@ func runPGAuditRotate() error {
 			slog.Error("keep_tail_column_absent_refusing", "error", err.Error())
 			return err
 		}
+		// The seed is INSERT ... SELECT * , which fails on a STORED generated column
+		// ("cannot insert a non-DEFAULT value into ... a generated column"). That would roll
+		// back the rotate transaction and wedge every run with an opaque error. assertNoOwned
+		// SequenceSQL already refuses identity/serial, but not GENERATED ALWAYS AS ... STORED;
+		// refuse it here (only when seeding -- pure rotation never inserts, so it is unaffected).
+		genCols, err := pgClient.QueryRows(ctx, generatedColumnsSQL(cfg.PGSchema, cfg.AuditTable))
+		if err != nil {
+			slog.Error("keep_tail_generated_column_check_failed", "error", err.Error())
+			return err
+		}
+		if len(genCols) != 1 || genCols[0] != "0" {
+			got := "an unexpected count result"
+			if len(genCols) == 1 {
+				got = genCols[0] + " generated column(s)"
+			}
+			err := fmt.Errorf("--keep-tail-days=%d seeds via INSERT ... SELECT *, which cannot write %s.%s's %s (STORED generated columns reject a non-DEFAULT value); keep-tail cannot seed this table. Use --keep-tail-days=0, or remove the generated column", cfg.KeepTailDays, cfg.PGSchema, cfg.AuditTable, got)
+			slog.Error("keep_tail_generated_column_present_refusing", "error", err.Error())
+			return err
+		}
 	}
 
 	now := time.Now()
@@ -703,6 +722,14 @@ func columnExistsSQL(schema, table, column string) string {
 	return fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '%s' AND table_name = '%s' AND column_name = '%s');", schema, table, column)
 }
 
+// generatedColumnsSQL counts STORED generated columns (is_generated = 'ALWAYS') on the
+// table. The keep-tail seed is INSERT ... SELECT *, which Postgres rejects on such a column,
+// so the keep-tail preflight refuses when this is non-zero. Identity/serial columns are a
+// separate case already covered by assertNoOwnedSequenceSQL.
+func generatedColumnsSQL(schema, table string) string {
+	return fmt.Sprintf("SELECT count(*) FROM information_schema.columns WHERE table_schema = '%s' AND table_name = '%s' AND is_generated = 'ALWAYS';", schema, table)
+}
+
 // nonOwnerGrantsSQL lists the roles (or PUBLIC) that hold a GRANT on the audit table
 // other than its owner. CREATE TABLE ... LIKE ... INCLUDING ALL copies neither table
 // ownership nor ACLs, so any such grant silently vanishes on the fresh table after a
@@ -868,6 +895,13 @@ func rotationDecision(cfg *config.AppConfig, now, newestRot time.Time, haveNewes
 // ACCESS EXCLUSIVE window becomes O(rows copied) rather than catalog-only, so keepTailDays
 // must stay small. 0 (default) writes no seed and is byte-for-byte the old behaviour --
 // correct for a write-only table (audit).
+//
+// One consequence for the ARCHIVE side: a seeded row is re-copied into the next live table
+// and therefore into the next archive too, so consecutive archives OVERLAP by ~keepTailDays
+// (a row spans ceil(keepTailDays / rotation cadence) archives). The live table itself never
+// duplicates -- the reader is fine -- but a consumer that UNIONs archives to reconstruct
+// history must dedupe by primary key. Idempotent consumers (the finding-change backfill, ON
+// CONFLICT DO NOTHING) are unaffected.
 func rotateSQL(schema, audit, archive, lockTimeout string, lockKey int64, newestSeen string, keepTailDays int, keepTailColumn string) string {
 	keepTailSeed := ""
 	if keepTailDays > 0 {

@@ -224,8 +224,8 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 	// sweep on metrics_audit) does not lose its lookback across a rotation boundary. 0 is
 	// pure rotation (correct for a write-only table). It must be <= retention: seeding more
 	// than you retain is degenerate (the source archive is dropped before that much tail
-	// exists), and retention is itself capped at maxAuditDays, which bounds the "now - N
-	// days" cutoff away from int64 overflow.
+	// exists). (The "now - N days" cutoff is computed in Postgres via make_interval, so there
+	// is no Go time.Duration overflow path to bound here -- this is purely the degeneracy cap.)
 	if c.KeepTailDays < 0 || c.KeepTailDays > c.RetentionDays {
 		return fmt.Errorf("--keep-tail-days / KEEP_TAIL_DAYS must be between 0 and --audit-retention-days (%d), got %d", c.RetentionDays, c.KeepTailDays)
 	}

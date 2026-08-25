@@ -166,6 +166,20 @@ func TestRotateSQL_RenameSuffixIsPerArchive(t *testing.T) {
 	}
 }
 
+func TestGeneratedColumnsSQL(t *testing.T) {
+	got := generatedColumnsSQL("rearm", "metrics_audit")
+	for _, want := range []string{
+		"count(*)",
+		"table_schema = 'rearm'",
+		"table_name = 'metrics_audit'",
+		"is_generated = 'ALWAYS'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generatedColumnsSQL missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestListArchivesSQL_Anchored(t *testing.T) {
 	got := listArchivesSQL("rearm", "audit")
 	if !strings.Contains(got, `tablename ~ '^audit_archive_[0-9]{8}t[0-9]{6}z(_[0-9a-f]+)?$'`) {
