@@ -1,15 +1,18 @@
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS oras-builder
+# oras is compiled here rather than downloaded as an upstream release tarball.
+# The published v1.3.3 binary is built with Go 1.25.7, whose stdlib carries 29
+# advisories including CVE-2026-39821 (critical) -- and 1.3.3 is the latest
+# release, so no version bump clears them. Building the same tagged source with
+# a current toolchain does. The version is still pinned, and the module proxy +
+# go.sum give provenance in place of the tarball checksum.
+FROM golang:1.26.6-alpine3.24@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS oras-builder
 ENV ORAS_VERSION="1.3.3"
 WORKDIR /tools
-COPY tools.sha256.sum .
-
-RUN apk add --no-cache curl && \
-    curl -LO "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
-    && sha256sum -c tools.sha256.sum \
+ENV CGO_ENABLED=0
+RUN go install -trimpath -ldflags="-s -w" oras.land/oras/cmd/oras@v${ORAS_VERSION} \
     && mkdir -p oras-install/ \
-    && tar -zxf oras_${ORAS_VERSION}_*.tar.gz -C oras-install/
+    && cp "$(go env GOPATH)/bin/oras" oras-install/oras
 
-FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS go-builder
+FROM golang:1.26.6-alpine3.24@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS go-builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
