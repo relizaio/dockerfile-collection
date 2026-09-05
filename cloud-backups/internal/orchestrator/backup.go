@@ -95,31 +95,64 @@ func (m *BackupManager) resolveTargets(basePaths []string, rollingMonths bool) [
 
 	slog.Info("rolling_months_strategy_enabled", "base_paths", basePaths)
 	now := time.Now().UTC()
-	currentMonth := now.Format("2006-01")
-	previousMonth := PreviousMonthSuffix(now)
 
 	var targets []string
 	for _, p := range basePaths {
-		targets = append(targets, fmt.Sprintf("%s-%s", p, currentMonth))
-		targets = append(targets, fmt.Sprintf("%s-%s", p, previousMonth))
+		targets = append(targets, TargetsForBasePath(p, rollingMonths, now)...)
 	}
 	return targets
 }
 
+// TargetsForBasePath expands one configured base path into the repositories a
+// run will attempt. Under rolling months these names are FABRICATED from the
+// calendar -- nothing checks that they exist, because the registry creates a
+// monthly repository lazily on the first push into it. A month with no
+// artifacts therefore has no repository at all, which is normal, not a fault.
+func TargetsForBasePath(basePath string, rollingMonths bool, now time.Time) []string {
+	if !rollingMonths {
+		return []string{basePath}
+	}
+	return []string{
+		fmt.Sprintf("%s-%s", basePath, now.Format("2006-01")),
+		fmt.Sprintf("%s-%s", basePath, PreviousMonthSuffix(now)),
+	}
+}
+
 // PreviousMonthSuffix is the YYYY-MM appended to build the previous-month
-// target. Exported because that target is the ONLY one under rolling months
-// whose absence is legitimate (it may predate the deployment, or the month may
-// have had no artifacts); callers deciding whether a skip is expected need to
-// identify it, and must not re-derive the date arithmetic independently.
+// target. Shared so no caller re-derives the date arithmetic independently.
 func PreviousMonthSuffix(now time.Time) string {
 	return now.AddDate(0, 0, -now.Day()).Format("2006-01")
 }
 
-// SkipIsExpected reports whether a skipped (absent) target is a legitimate
-// absence rather than a missing backup. Under explicit paths every target was
-// named by an operator, so no absence is expected. Under rolling months only
-// the previous-month target may legitimately not exist -- the CURRENT month is
-// the one being actively written, and its absence means a real gap.
-func SkipIsExpected(target string, rollingMonths bool, now time.Time) bool {
-	return rollingMonths && strings.HasSuffix(target, "-"+PreviousMonthSuffix(now))
+// UncoveredBasePaths returns the configured base paths for which NO target
+// produced a backup, given the set of targets the run skipped as absent.
+//
+// This is the strongest coverage question answerable from the tool's own
+// credentials. Whether an individual month SHOULD exist is not knowable here:
+// the registry cannot distinguish "never created" from "deleted" without
+// catalogue access, and the destination cannot be read back at all under a
+// write-only credential. But "this base path produced nothing" is unambiguous,
+// and it is what a renamed, deleted or mistyped path looks like. Under explicit
+// paths a base path expands to exactly one target, so this keeps the strict
+// behaviour there: any skip means that path yielded nothing.
+func UncoveredBasePaths(basePaths []string, rollingMonths bool, now time.Time, skipped []string) []string {
+	absent := make(map[string]struct{}, len(skipped))
+	for _, s := range skipped {
+		absent[s] = struct{}{}
+	}
+
+	var uncovered []string
+	for _, base := range basePaths {
+		targets := TargetsForBasePath(base, rollingMonths, now)
+		missing := 0
+		for _, t := range targets {
+			if _, ok := absent[t]; ok {
+				missing++
+			}
+		}
+		if len(targets) > 0 && missing == len(targets) {
+			uncovered = append(uncovered, base)
+		}
+	}
+	return uncovered
 }
