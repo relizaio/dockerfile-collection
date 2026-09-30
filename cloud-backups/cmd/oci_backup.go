@@ -46,6 +46,7 @@ func runBackup() error {
 		StorageType:         viper.GetString("backup-storage-type"),
 		MaxConcurrentJobs:   viper.GetInt("max-concurrent-jobs"),
 		EncryptionPassword:  viper.GetString("encryption-password"),
+		AllowUnencrypted:    viper.GetBool("allow-unencrypted"),
 		DumpPrefix:          viper.GetString("dump-prefix"),
 		Timeout:             viper.GetDuration("timeout"),
 		AWSBucket:           viper.GetString("aws-bucket"),
@@ -65,6 +66,7 @@ func runBackup() error {
 		slog.Error("validation_error", "error", err.Error())
 		return err
 	}
+	warnIfUnencrypted(cfg)
 
 	// 2. Setup context & graceful shutdown
 	ctx, cancel := context.WithCancelCause(context.Background())

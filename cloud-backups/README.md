@@ -20,7 +20,8 @@ cloud-backup pg audit-rotate     # Rotate a write-only audit table: archive + dr
 | Flag | Env Variable | Description | Default |
 | --- | --- | --- | --- |
 | `--backup-storage-type` | `BACKUP_STORAGE_TYPE` | Cloud provider: `s3` or `azure` | `s3` |
-| `--encryption-password` | `ENCRYPTION_PASSWORD` | If set, encrypts the stream using `age` | *(optional)* |
+| `--encryption-password` | `ENCRYPTION_PASSWORD` | Encrypts the stream using `age`. Required for `oci backup`, `pg backup` and `pg audit-rotate` unless `--allow-unencrypted` is set | *(none)* |
+| `--allow-unencrypted` | `ALLOW_UNENCRYPTED` | Allow a backup to be written UNENCRYPTED when no `--encryption-password` is set. Without it, a missing password (for example a deleted or renamed secret key) makes the backup refuse to run, logging an ERROR and exiting non-zero, instead of silently writing plaintext. When set, every unencrypted run logs a `backup_unencrypted` WARN | `false` |
 | `--dump-prefix` | `DUMP_PREFIX` | Prefix for the backup filename | `backup` |
 | `--timeout` | `TIMEOUT` | Per-job stream timeout, e.g. `2h`, `90m` | `2h` |
 
@@ -83,7 +84,8 @@ cloud-backup oci backup \
   --backup-storage-type s3 \
   --aws-bucket my-backup-bucket --aws-region us-east-1 \
   --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
-  --registry-base-paths "namespace/repo1,namespace/repo2"
+  --registry-base-paths "namespace/repo1,namespace/repo2" \
+  --encryption-password "$ENC_PASSWORD"
 
 # Backup with rolling months (backs up current + previous month variants)
 cloud-backup oci backup \
@@ -94,10 +96,11 @@ cloud-backup oci backup \
   --aws-bucket my-backup-bucket --aws-region us-east-1 \
   --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
   --registry-base-paths "namespace/artifacts" \
-  --append-rolling-months
+  --append-rolling-months \
+  --encryption-password "$ENC_PASSWORD"
 # Produces files like:
-#   artifacts-2026-04.tar.gz
-#   artifacts-2026-03.tar.gz
+#   artifacts-2026-04.tar.gz.age
+#   artifacts-2026-03.tar.gz.age
 
 # Restore to a different namespace (same repo name)
 # List backup files first:
@@ -211,7 +214,8 @@ cloud-backup pg backup \
   --backup-storage-type s3 \
   --aws-bucket my-backup-bucket --aws-region us-east-1 \
   --aws-access-key-id "$KEY_ID" --aws-secret-access-key "$SECRET" \
-  --dump-prefix "prod-mydb"
+  --dump-prefix "prod-mydb" \
+  --encryption-password "$ENC_PASSWORD"
 
 # Full automated restore (--restore-to defaults to --pg-database when omitted)
 export PGPASSWORD="secret"
@@ -257,10 +261,9 @@ Design notes:
 | `--lock-timeout` | `LOCK_TIMEOUT` | `lock_timeout` for the rename; on contention the rotate rolls back and retries next run | `5s` |
 | `--verify-restore` | `VERIFY_RESTORE` | Before dropping, re-download + decrypt + `pg_restore -l` (proves restorability) + SHA-256 match. Needs read access; costs a full re-download | `false` |
 | `--drain-backlog` | `DRAIN_BACKLOG` | Back up and DROP the archive created THIS run, ignoring retention. For the one-off cutover only -- never for the recurring cron | `false` |
-| `--allow-unencrypted` | `ALLOW_UNENCRYPTED` | Allow writing an UNENCRYPTED dump to the permanent bucket when no `--encryption-password` is set | `false` |
 | `--drop-instance-rows` | `DROP_INSTANCE_ROWS` | Proceed even if the audit table holds frozen `entity_name='instances'` rows still read by the app | `false` |
 
-Shares the `pg` connection flags above and the storage/`--dump-prefix`/`--encryption-password` flags. `PGPASSWORD` must be set in the environment; the role needs write + DDL on the audit table.
+Shares the `pg` connection flags above and the storage/`--dump-prefix`/`--encryption-password`/`--allow-unencrypted` flags. `PGPASSWORD` must be set in the environment; the role needs write + DDL on the audit table.
 
 ```bash
 export PGPASSWORD="secret"
@@ -331,7 +334,7 @@ kubectl create secret generic cloud-backup \
   --from-literal=aws-region="us-east-1" \
   --from-literal=aws-access-key-id="AKIA..." \
   --from-literal=aws-secret-access-key="..." \
-  --from-literal=encryption-password="optional"
+  --from-literal=encryption-password="<a long random password>"   # required unless ALLOW_UNENCRYPTED=true
 
 # Azure
 kubectl create secret generic cloud-backup-azure \
@@ -340,5 +343,5 @@ kubectl create secret generic cloud-backup-azure \
   --from-literal=azure-client-id="..." \
   --from-literal=azure-client-secret="..." \
   --from-literal=azure-container="backups" \
-  --from-literal=encryption-password="optional"
+  --from-literal=encryption-password="<a long random password>"   # required unless ALLOW_UNENCRYPTED=true
 ```

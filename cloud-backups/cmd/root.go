@@ -65,6 +65,7 @@ func init() {
 	// 2. Shared persistent flags (available to all subcommands)
 	rootCmd.PersistentFlags().String("backup-storage-type", "s3", "Destination cloud provider: s3 or azure (ENV: BACKUP_STORAGE_TYPE)")
 	rootCmd.PersistentFlags().String("encryption-password", "", "Password for age encryption (ENV: ENCRYPTION_PASSWORD)")
+	rootCmd.PersistentFlags().Bool("allow-unencrypted", false, "Allow a backup to be written UNENCRYPTED when no --encryption-password is set; without it oci backup, pg backup and pg audit-rotate refuse to run (ENV: ALLOW_UNENCRYPTED)")
 	rootCmd.PersistentFlags().String("dump-prefix", "backup", "Prefix attached to the final backup filename (ENV: DUMP_PREFIX)")
 	rootCmd.PersistentFlags().String("timeout", "12h", "Per-job stream timeout, e.g. 2h, 90m (ENV: TIMEOUT)")
 
@@ -89,6 +90,7 @@ func init() {
 	}
 	mustBindPFlag("backup-storage-type", "backup-storage-type")
 	mustBindPFlag("encryption-password", "encryption-password")
+	mustBindPFlag("allow-unencrypted", "allow-unencrypted")
 	mustBindPFlag("dump-prefix", "dump-prefix")
 	mustBindPFlag("timeout", "timeout")
 	mustBindPFlag("aws-bucket", "aws-bucket")
