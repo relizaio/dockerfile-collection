@@ -117,7 +117,7 @@ func (c *AppConfig) ValidateBackup() error {
 	if len(c.CleanBasePaths()) == 0 {
 		return fmt.Errorf("--registry-base-paths / REGISTRY_BASE_PATHS must contain at least one non-empty path")
 	}
-	return nil
+	return c.requireEncryption("the OCI artifact backup")
 }
 
 // ValidateRestore checks all fields required for the OCI restore command.
@@ -168,6 +168,9 @@ func (c *AppConfig) ValidatePGBackup() error {
 	}
 	if _, err := exec.LookPath("pg_dump"); err != nil {
 		return fmt.Errorf("pg_dump not found in PATH: %w", err)
+	}
+	if err := c.requireEncryption("the database dump"); err != nil {
+		return err
 	}
 	return c.validateStorage()
 }
@@ -239,10 +242,21 @@ func (c *AppConfig) ValidatePGAuditRotate() error {
 	}
 	// The archive is written to a permanent-retention bucket where it cannot be
 	// deleted; refuse to write it in plaintext unless explicitly allowed.
-	if c.EncryptionPassword == "" && !c.AllowUnencrypted {
-		return fmt.Errorf("audit data would be written UNENCRYPTED to a permanent bucket; set --encryption-password / ENCRYPTION_PASSWORD, or pass --allow-unencrypted / ALLOW_UNENCRYPTED=true to opt in")
+	if err := c.requireEncryption("audit data (to a permanent bucket)"); err != nil {
+		return err
 	}
 	return c.validateStorage()
+}
+
+// requireEncryption refuses a backup that would be written in plaintext unless the caller opted
+// in. An empty encryption password used to mean "do not encrypt" silently: a deleted or renamed
+// secret key (the helm cronjobs mount it optional) turned an encrypted backup into a plaintext
+// one with no log line, and left the last encrypted object frozen where freshness checks see it.
+func (c *AppConfig) requireEncryption(what string) error {
+	if c.EncryptionPassword == "" && !c.AllowUnencrypted {
+		return fmt.Errorf("%s would be written UNENCRYPTED; set --encryption-password / ENCRYPTION_PASSWORD, or pass --allow-unencrypted / ALLOW_UNENCRYPTED=true to opt in", what)
+	}
+	return nil
 }
 
 // ValidateDownload checks all fields required for the oci/pg download commands.

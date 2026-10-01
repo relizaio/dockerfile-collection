@@ -112,6 +112,7 @@ func runPGAuditRotate() error {
 		slog.Error("validation_error", "error", err.Error())
 		return err
 	}
+	warnIfUnencrypted(cfg)
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(fmt.Errorf("runPGAuditRotate exited"))

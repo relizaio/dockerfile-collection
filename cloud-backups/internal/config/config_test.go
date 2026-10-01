@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -174,7 +176,65 @@ func validOCIBackupConfig() *AppConfig {
 	c.RegistryUsername = "user"
 	c.RegistryToken = "tok"
 	c.RegistryBasePaths = []string{"org/repo"}
+	c.EncryptionPassword = "secret"
 	return c
+}
+
+func TestValidateBackup_OCI_Valid(t *testing.T) {
+	if err := validOCIBackupConfig().ValidateBackup(); err != nil {
+		t.Fatalf("expected a valid config, got %v", err)
+	}
+}
+
+// An empty encryption password used to mean "write plaintext" with no log line: a deleted or
+// renamed secret key silently turned an encrypted backup into a plaintext one.
+func TestValidateBackup_OCI_RefusesPlaintextWithoutOptIn(t *testing.T) {
+	c := validOCIBackupConfig()
+	c.EncryptionPassword = ""
+	err := c.ValidateBackup()
+	if err == nil {
+		t.Fatal("expected an error for an empty encryption password without --allow-unencrypted")
+	}
+	if !strings.Contains(err.Error(), "UNENCRYPTED") || !strings.Contains(err.Error(), "--allow-unencrypted") {
+		t.Fatalf("error should say what would happen and how to opt in, got %q", err.Error())
+	}
+}
+
+func TestValidateBackup_OCI_PlaintextWithOptIn(t *testing.T) {
+	c := validOCIBackupConfig()
+	c.EncryptionPassword = ""
+	c.AllowUnencrypted = true
+	if err := c.ValidateBackup(); err != nil {
+		t.Fatalf("expected --allow-unencrypted to permit a plaintext backup, got %v", err)
+	}
+}
+
+func validPGBackupConfig(t *testing.T) *AppConfig {
+	if _, err := exec.LookPath("pg_dump"); err != nil {
+		t.Skip("pg_dump not in PATH; ValidatePGBackup requires it")
+	}
+	c := validS3Config()
+	c.PGHost = "db"
+	c.PGPort = "5432"
+	c.PGDatabase = "rearm"
+	c.PGUser = "postgres"
+	c.EncryptionPassword = "secret"
+	return c
+}
+
+func TestValidatePGBackup_RefusesPlaintextWithoutOptIn(t *testing.T) {
+	c := validPGBackupConfig(t)
+	if err := c.ValidatePGBackup(); err != nil {
+		t.Fatalf("expected a valid config, got %v", err)
+	}
+	c.EncryptionPassword = ""
+	if err := c.ValidatePGBackup(); err == nil || !strings.Contains(err.Error(), "UNENCRYPTED") {
+		t.Fatalf("expected a plaintext-refusal error, got %v", err)
+	}
+	c.AllowUnencrypted = true
+	if err := c.ValidatePGBackup(); err != nil {
+		t.Fatalf("expected --allow-unencrypted to permit a plaintext dump, got %v", err)
+	}
 }
 
 func TestValidateBackup_OCI_MissingHost(t *testing.T) {
