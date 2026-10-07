@@ -237,35 +237,6 @@ func TestRunBackups_ContextCancelled(t *testing.T) {
 	_ = total
 }
 
-// Under rolling months only the PREVIOUS-month target may legitimately be
-// absent. The current month is being actively written, so treating its absence
-// as expected would let a deleted or renamed repo pass as a healthy run -- the
-// exact silent-gap this predicate exists to close.
-func TestSkipIsExpected(t *testing.T) {
-	now := time.Date(2026, 8, 14, 3, 35, 0, 0, time.UTC)
-
-	tests := []struct {
-		name          string
-		target        string
-		rollingMonths bool
-		want          bool
-	}{
-		{"previous month under rolling months", "rearm-artifacts/rebom-artifacts-2026-07", true, true},
-		{"current month under rolling months", "rearm-artifacts/rebom-artifacts-2026-08", true, false},
-		{"unrelated month under rolling months", "rearm-artifacts/rebom-artifacts-2026-05", true, false},
-		{"previous month under explicit paths", "rearm-artifacts/rebom-artifacts-2026-07", false, false},
-		{"explicit path", "rearm-artifacts/rebom-artifacts", false, false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := SkipIsExpected(tc.target, tc.rollingMonths, now); got != tc.want {
-				t.Errorf("SkipIsExpected(%q, %v): got %v want %v", tc.target, tc.rollingMonths, got, tc.want)
-			}
-		})
-	}
-}
-
 // The suffix must match what resolveTargets actually builds, or the predicate
 // would exempt nothing and re-open the noise it is meant to avoid. January is
 // the case naive month arithmetic gets wrong.
@@ -286,4 +257,102 @@ func TestPreviousMonthSuffix_CrossesYearBoundary(t *testing.T) {
 		t.Errorf("second target %q must carry the previous-month suffix used by SkipIsExpected", targets[1])
 	}
 	_ = now
+}
+
+// The coverage rule is deliberately per BASE PATH, not per target. Under rolling
+// months the month suffixes are fabricated from the calendar and the registry
+// creates a monthly repository lazily on first push, so a month with no
+// artifacts has no repository -- normal, not a fault. Alerting per target paged
+// weekly for a low-traffic path; alerting per base path does not.
+func TestUncoveredBasePaths(t *testing.T) {
+	now := time.Date(2026, 8, 15, 8, 26, 0, 0, time.UTC)
+	const rebomCur, rebomPrev = "rearm-artifacts/rebom-artifacts-2026-08", "rearm-artifacts/rebom-artifacts-2026-07"
+	const dlCur, dlPrev = "rearm-artifacts/downloadable-artifacts-2026-08", "rearm-artifacts/downloadable-artifacts-2026-07"
+	bases := []string{"rearm-artifacts/rebom-artifacts", "rearm-artifacts/downloadable-artifacts"}
+
+	tests := []struct {
+		name          string
+		basePaths     []string
+		rollingMonths bool
+		skipped       []string
+		want          []string
+	}{
+		{
+			// The production false positive: nobody published a downloadable
+			// artifact in August, so that month's repo was never created.
+			// July backed up fine, so the path IS covered.
+			name:      "quiet current month is covered by the previous month",
+			basePaths: bases, rollingMonths: true,
+			skipped: []string{dlCur},
+			want:    nil,
+		},
+		{
+			name:      "base path absent for both months is uncovered",
+			basePaths: bases, rollingMonths: true,
+			skipped: []string{dlCur, dlPrev},
+			want:    []string{"rearm-artifacts/downloadable-artifacts"},
+		},
+		{
+			name:      "previous month alone is covered",
+			basePaths: bases, rollingMonths: true,
+			skipped: []string{dlPrev},
+			want:    nil,
+		},
+		{
+			name:      "every base path uncovered",
+			basePaths: bases, rollingMonths: true,
+			skipped: []string{rebomCur, rebomPrev, dlCur, dlPrev},
+			want:    bases,
+		},
+		{
+			// Explicit paths expand to one target each, so the strict
+			// behaviour is preserved: any skip means no backup for that path.
+			name:      "explicit path skipped is uncovered",
+			basePaths: []string{"rearm-artifacts/rebom-artifacts"}, rollingMonths: false,
+			skipped: []string{"rearm-artifacts/rebom-artifacts"},
+			want:    []string{"rearm-artifacts/rebom-artifacts"},
+		},
+		{
+			name:      "nothing skipped",
+			basePaths: bases, rollingMonths: true,
+			skipped: nil,
+			want:    nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := UncoveredBasePaths(tc.basePaths, tc.rollingMonths, now, tc.skipped)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("index %d: got %q want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// The coverage check must expand base paths exactly as the run does, or it would
+// look for targets that were never attempted.
+func TestTargetsForBasePath_MatchesResolveTargets(t *testing.T) {
+	now := time.Now().UTC()
+	m := &BackupManager{}
+
+	rolling := m.resolveTargets([]string{"repo/a"}, true)
+	if got := TargetsForBasePath("repo/a", true, now); len(got) != len(rolling) {
+		t.Fatalf("rolling: helper produced %v, resolveTargets produced %v", got, rolling)
+	}
+	for i, tgt := range TargetsForBasePath("repo/a", true, now) {
+		if tgt != rolling[i] {
+			t.Errorf("rolling index %d: helper %q vs resolveTargets %q", i, tgt, rolling[i])
+		}
+	}
+
+	explicit := m.resolveTargets([]string{"repo/a"}, false)
+	if got := TargetsForBasePath("repo/a", false, now); len(got) != 1 || got[0] != explicit[0] {
+		t.Errorf("explicit: helper %v vs resolveTargets %v", got, explicit)
+	}
 }
