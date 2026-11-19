@@ -1,17 +1,17 @@
 # oras is compiled here rather than downloaded as an upstream release tarball.
 # The published release binaries are built with an older Go toolchain whose
-# stdlib carries advisories a current toolchain clears, and oras v1.3.4 (the
-# latest release) still pins golang.org/x/crypto v0.52.0, which carries
-# GO-2026-6303 / GO-2026-6354 / GO-2026-6355 (fixed in v0.55.0 / v0.56.0).
+# stdlib carries advisories a current toolchain clears, and oras v1.3.6 (the
+# latest 1.3.x release) still pins golang.org/x/crypto v0.57.0, which carries
+# advisories that v0.59.0 fixes.
 # `go install pkg@version` cannot override a dependency of the installed module,
 # so oras is built through a throwaway wrapper module: it requires the tagged
 # oras release as a tool and raises x/crypto by minimum version selection. The
-# oras source is the unmodified v1.3.4 module (checked against sum.golang.org),
-# and the binary's build info records oras.land/oras v1.3.4 plus the raised
+# oras source is the unmodified v1.3.6 module (checked against sum.golang.org),
+# and the binary's build info records oras.land/oras v1.3.6 plus the raised
 # x/crypto, so the SBOM still names the exact oras release.
-FROM golang:1.26.8-alpine3.24@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS oras-builder
-ENV ORAS_VERSION="1.3.4"
-ENV XCRYPTO_VERSION="0.57.0"
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS oras-builder
+ENV ORAS_VERSION="1.3.6"
+ENV XCRYPTO_VERSION="0.59.0"
 ENV CGO_ENABLED=0
 WORKDIR /tools/oras-build
 RUN go mod init oras-build \
@@ -22,7 +22,7 @@ RUN go mod init oras-build \
     && go version -m /tools/oras-install/oras | grep -q "oras.land/oras[[:space:]]*v${ORAS_VERSION}[[:space:]]" \
     && go version -m /tools/oras-install/oras | grep -q "golang.org/x/crypto[[:space:]]*v${XCRYPTO_VERSION}[[:space:]]"
 
-FROM golang:1.26.8-alpine3.24@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS go-builder
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS go-builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
@@ -37,7 +37,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o
 # ship in the base layer, and an all-layers SBOM (which CI produces) reports
 # them. Copying the finished rootfs onto scratch means only the upgraded
 # packages ship; the apk database is kept, so scanners still see every package.
-FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS rootfs
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS rootfs
 
 RUN apk upgrade --no-cache \
     && apk add --no-cache ca-certificates tzdata postgresql17-client \
