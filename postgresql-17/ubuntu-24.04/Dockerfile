@@ -1,7 +1,7 @@
 # Copyright Reliza Incorporated. 2019 - 2026. Licensed under the terms of MIT.
 # SPDX-License-Identifier: MIT
 
-FROM docker.io/library/ubuntu:noble-20260324@sha256:84e77dee7d1bc93fb029a45e3c6cb9d8aa4831ccfcc7103d36e876938d28895b
+FROM docker.io/library/ubuntu:noble-20261110.1@sha256:882e1e56091c9ffbc70c026ff5935fe85d3c91ad155917865ba2ffa23ede1560
 
 ARG EXTRA_LOCALES
 ARG TARGETARCH
@@ -21,8 +21,9 @@ ENV HOME="/" \
 COPY prebuildfs /
 SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
 
-# Combined package installation and PostgreSQL setup to reduce layers
-RUN apt-get update && install_packages ca-certificates curl libbsd0 libbz2-1.0 libedit2 libffi8 libgcc-s1 libgmp10 libgnutls30 libhogweed6 libicu74 libidn2-0 libldap-common liblz4-1 liblzma5 libmd0 libnettle8 libp11-kit0 libpcre2-8-0 libreadline8t64 libsasl2-2 libsqlite3-0 libssl3t64 libstdc++6 libtasn1-6 libtinfo6 libunistring5 libuuid1 libxml2 libxslt1.1 libzstd1 locales procps zlib1g && \
+# Combined package installation and PostgreSQL setup to reduce layers. `apt-get upgrade` first: the base
+# image lags the Ubuntu security pocket (openssl, apt, util-linux and others), and only an upgrade picks those up.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && install_packages ca-certificates curl libbsd0 libbz2-1.0 libedit2 libffi8 libgcc-s1 libgmp10 libgnutls30 libhogweed6 libicu74 libidn2-0 libldap-common liblz4-1 liblzma5 libmd0 libnettle8 libp11-kit0 libpcre2-8-0 libreadline8t64 libsasl2-2 libsqlite3-0 libssl3t64 libstdc++6 libtasn1-6 libtinfo6 libunistring5 libuuid1 libxml2 libxslt1.1 libzstd1 locales procps zlib1g && \
     # Add PostgreSQL repository and install PostgreSQL
     apt-get update && apt-get install -y wget gnupg2 && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
@@ -31,8 +32,8 @@ RUN apt-get update && \
     echo "=== Available PostgreSQL 17 versions ===" && \
     apt-cache madison postgresql-17 | head -10 && \
     apt-get install -y \
-        postgresql-17=17.9-1.pgdg24.04+1 \
-        postgresql-client-17=17.9-1.pgdg24.04+1 && \
+        postgresql-17=17.12-1.pgdg24.04+1 \
+        postgresql-client-17=17.12-1.pgdg24.04+1 && \
     apt-mark hold postgresql-17 postgresql-client-17
     # Setup PostgreSQL directories and permissions
 RUN mkdir -p /opt/relizaio/postgresql/{bin,share,conf,conf.default,logs,tmp} && \

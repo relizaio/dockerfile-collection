@@ -2,8 +2,8 @@
 set -e
 
 # Configuration
-BITNAMI_IMAGE="bitnami/postgresql:17.5.0-debian-12-r4"
-ORIGINAL_BITNAMI_IMAGE="bitnami/postgresql:17"
+BITNAMI_IMAGE="bitnamilegacy/postgresql:17.5.0-debian-12-r4"
+ORIGINAL_BITNAMI_IMAGE="bitnamilegacy/postgresql:17"
 SELFHOSTED_IMAGE="postgresql-17-selfhosted"
 VOLUME_NAME="pg_test_data"
 BITNAMI_CONTAINER="pg-bitnami"
@@ -158,10 +158,10 @@ check_version() {
     # Verify it's PostgreSQL 17
     [[ "$version" == *"PostgreSQL 17"* ]] || { echo "  ✗ Wrong PostgreSQL version: $version"; return 1; }
     
-    # Verify it's Debian 13 build
-    [[ "$version" == *"pgdg13"* ]] || { echo "  ✗ Not Debian 13 build: $version"; return 1; }
+    # Verify it's the Ubuntu 24.04 build (the image the workflow publishes as rearm-postgres)
+    [[ "$version" == *"pgdg24.04"* ]] || { echo "  ✗ Not the Ubuntu 24.04 build: $version"; return 1; }
     
-    echo "  ✓ PostgreSQL 17 on Debian 13 confirmed"
+    echo "  ✓ PostgreSQL 17 on Ubuntu 24.04 confirmed"
     echo "    $version"
 }
 
@@ -401,10 +401,10 @@ EOF
 
 main() {
     echo "• Building self-hosted image..."
-    if ! docker build -t $SELFHOSTED_IMAGE ./debian-13/ >/dev/null 2>&1; then
+    if ! docker build -t $SELFHOSTED_IMAGE ./ubuntu-24.04/ >/dev/null 2>&1; then
         echo "  ✗ Self-hosted image build failed"
         echo "Build logs:"
-        docker build -t $SELFHOSTED_IMAGE ./debian-13/
+        docker build -t $SELFHOSTED_IMAGE ./ubuntu-24.04/
         return 1
     fi
     echo "  ✓ Self-hosted image built"
