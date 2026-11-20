@@ -21,9 +21,10 @@ ENV HOME="/" \
 COPY prebuildfs /
 SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
 
-# Combined package installation and PostgreSQL setup to reduce layers. `apt-get upgrade` first: the base
-# image lags the Ubuntu security pocket (openssl, apt, util-linux and others), and only an upgrade picks those up.
-RUN apt-get update && apt-get upgrade -y --no-install-recommends && install_packages ca-certificates curl libbsd0 libbz2-1.0 libedit2 libffi8 libgcc-s1 libgmp10 libgnutls30 libhogweed6 libicu74 libidn2-0 libldap-common liblz4-1 liblzma5 libmd0 libnettle8 libp11-kit0 libpcre2-8-0 libreadline8t64 libsasl2-2 libsqlite3-0 libssl3t64 libstdc++6 libtasn1-6 libtinfo6 libunistring5 libuuid1 libxml2 libxslt1.1 libzstd1 locales procps zlib1g && \
+# Combined package installation and PostgreSQL setup to reduce layers. Upgrade first: the base image lags the
+# Ubuntu security pocket (openssl, apt, util-linux and others). full-upgrade, so a fix that adds a dependency is
+# not held back; noninteractive, as install_packages does for its own installs.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y --no-install-recommends && install_packages ca-certificates curl libbsd0 libbz2-1.0 libedit2 libffi8 libgcc-s1 libgmp10 libgnutls30 libhogweed6 libicu74 libidn2-0 libldap-common liblz4-1 liblzma5 libmd0 libnettle8 libp11-kit0 libpcre2-8-0 libreadline8t64 libsasl2-2 libsqlite3-0 libssl3t64 libstdc++6 libtasn1-6 libtinfo6 libunistring5 libuuid1 libxml2 libxslt1.1 libzstd1 locales procps zlib1g && \
     # Add PostgreSQL repository and install PostgreSQL
     apt-get update && apt-get install -y wget gnupg2 && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
@@ -61,7 +62,7 @@ COPY rootfs /
 RUN /opt/relizaio/scripts/postgresql/postunpack.sh && \
     /opt/relizaio/scripts/locales/generate-locales.sh
 
-ENV APP_VERSION="17.9.1" \
+ENV APP_VERSION="17.12.0" \
     RELIZAIO_APP_NAME="postgresql" \
     IMAGE_REVISION="6" \
     LANG="en_US.UTF-8" \
@@ -75,7 +76,7 @@ EXPOSE 5432
 
 USER 1001
 
-LABEL org.opencontainers.image.base.name="docker.io/library/ubuntu:noble-20260324" \
+LABEL org.opencontainers.image.base.name="docker.io/library/ubuntu:noble-20261110.1" \
       org.opencontainers.image.description="PostgreSQL 17 packaged by Reliza Incorporated" \
       org.opencontainers.image.documentation="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17/README.md" \
       org.opencontainers.image.source="https://github.com/relizaio/dockerfile-collection/tree/main/postgresql-17"
@@ -85,7 +86,7 @@ LABEL ci_environment=$CI_ENV
 LABEL org.opencontainers.image.version=$VERSION
 LABEL org.opencontainers.image.vendor="Reliza Incorporated"
 LABEL org.opencontainers.image.title="ReARM PostgreSQL"
-LABEL PG_VERSION="17.9-1.pgdg24.04+1"
+LABEL PG_VERSION="17.12-1.pgdg24.04+1"
 
 
 ENTRYPOINT [ "/opt/relizaio/scripts/postgresql/entrypoint.sh" ]
