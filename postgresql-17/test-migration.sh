@@ -2,9 +2,12 @@
 set -e
 
 # Configuration
-BITNAMI_IMAGE="bitnami/postgresql:17.5.0-debian-12-r4"
-ORIGINAL_BITNAMI_IMAGE="bitnami/postgresql:17"
+# Bitnami moved its free tags to the bitnamilegacy namespace in 2025; bitnami/postgresql no longer serves these.
+BITNAMI_IMAGE="bitnamilegacy/postgresql:17.5.0-debian-12-r4"
+ORIGINAL_BITNAMI_IMAGE="bitnamilegacy/postgresql:17"
 SELFHOSTED_IMAGE="postgresql-17-selfhosted"
+# The PostgreSQL release ubuntu-24.04/Dockerfile pins; the version check fails on any other.
+EXPECTED_PG_VERSION="17.12"
 VOLUME_NAME="pg_test_data"
 BITNAMI_CONTAINER="pg-bitnami"
 ORIGINAL_BITNAMI_CONTAINER="pg-original-bitnami"
@@ -156,12 +159,12 @@ check_version() {
     local version=$(docker exec -e PGPASSWORD=$DB_PASSWORD $SELFHOSTED_CONTAINER psql -U $DB_USER -d $DB_NAME -t -c "SELECT version();" | head -1 | xargs)
     
     # Verify it's PostgreSQL 17
-    [[ "$version" == *"PostgreSQL 17"* ]] || { echo "  ✗ Wrong PostgreSQL version: $version"; return 1; }
+    [[ "$version" == *"PostgreSQL ${EXPECTED_PG_VERSION} "* ]] || { echo "  ✗ Not PostgreSQL ${EXPECTED_PG_VERSION}: $version"; return 1; }
     
-    # Verify it's Debian 13 build
-    [[ "$version" == *"pgdg13"* ]] || { echo "  ✗ Not Debian 13 build: $version"; return 1; }
+    # Verify it's the Ubuntu 24.04 build (the image the workflow publishes as rearm-postgres)
+    [[ "$version" == *"pgdg24.04"* ]] || { echo "  ✗ Not the Ubuntu 24.04 build: $version"; return 1; }
     
-    echo "  ✓ PostgreSQL 17 on Debian 13 confirmed"
+    echo "  ✓ PostgreSQL ${EXPECTED_PG_VERSION} on Ubuntu 24.04 confirmed"
     echo "    $version"
 }
 
@@ -401,10 +404,10 @@ EOF
 
 main() {
     echo "• Building self-hosted image..."
-    if ! docker build -t $SELFHOSTED_IMAGE ./debian-13/ >/dev/null 2>&1; then
+    if ! docker build -t $SELFHOSTED_IMAGE ./ubuntu-24.04/ >/dev/null 2>&1; then
         echo "  ✗ Self-hosted image build failed"
         echo "Build logs:"
-        docker build -t $SELFHOSTED_IMAGE ./debian-13/
+        docker build -t $SELFHOSTED_IMAGE ./ubuntu-24.04/
         return 1
     fi
     echo "  ✓ Self-hosted image built"
